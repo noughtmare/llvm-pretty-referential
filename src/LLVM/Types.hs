@@ -357,6 +357,11 @@ data DICompileUnit = DICompileUnit
   , dicuMacros             :: Maybe ValMd
   , dicuDWOId              :: Word64
   , dicuSplitDebugInlining :: Bool
+  , dicuDebugInfoForProf   :: Bool
+  , dicuNameTableKind      :: Word64
+  , dicuRangesBaseAddress  :: Word64
+  , dicuSysRoot            :: Maybe String
+  , dicuSDK                :: Maybe String
   }
   deriving (Data, Eq, Generic, Ord, Show)
 
@@ -377,6 +382,7 @@ data DICompositeType = DICompositeType
   , dictTemplateParams :: Maybe ValMd
   , dictIdentifier     :: Maybe String
   , dictDiscriminator  :: Maybe ValMd
+  , dictDataLocation   :: Maybe ValMd
   }
   deriving (Data, Eq, Generic, Ord, Show)
 

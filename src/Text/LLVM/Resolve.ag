@@ -28,6 +28,12 @@ import LLVM.TypeInference
 
 include "AG.ag"
 
+{
+resolve :: Module -> R.Module
+resolve m = res_Syn_Module $ wrap_Module (sem_Module m) Inh_Module
+  { counter_Inh_Module = 0 }
+}
+
 --------------------------------------------------------------------------------
 -- Boring mechanical resolution code
 --------------------------------------------------------------------------------
@@ -426,6 +432,11 @@ sem DICompileUnit [ | | res :: {R.DICompileUnit} ]
             @dicuMacros.res
             @dicuDWOId
             @dicuSplitDebugInlining
+            @dicuDebugInfoForProf
+            @dicuNameTableKind
+            @dicuRangesBaseAddress
+            @dicuSysRoot
+            @dicuSDK
 
 sem DICompositeType [ | | res :: {R.DICompositeType} ]
   | DICompositeType
@@ -447,6 +458,7 @@ sem DICompositeType [ | | res :: {R.DICompositeType} ]
            @dictTemplateParams.res
            @dictIdentifier
            @dictDiscriminator.res
+           @dictDataLocation.res
 
 sem DIDerivedType [ | | res :: {R.DIDerivedType} ]
   | DIDerivedType
@@ -623,8 +635,6 @@ nextUnique x = (x + 1, x)
 
 attr *
   chn counter :: Int
-
-sem Module | Module loc.counter = 0
 
 sem BasicBlock | BasicBlock loc.bbUniqueId :: uniqueref counter
 

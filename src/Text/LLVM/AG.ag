@@ -687,6 +687,11 @@ data DICompileUnit
       dicuMacros             :: MaybeValMd
       dicuDWOId              :: Word64
       dicuSplitDebugInlining :: Bool
+      dicuDebugInfoForProf   :: Bool
+      dicuNameTableKind      :: Word64
+      dicuRangesBaseAddress  :: Word64
+      dicuSysRoot            :: {Maybe String}
+      dicuSDK                :: {Maybe String}
 
 data DICompositeType
   | DICompositeType
@@ -706,6 +711,7 @@ data DICompositeType
       dictTemplateParams :: MaybeValMd
       dictIdentifier     :: {Maybe String}
       dictDiscriminator  :: MaybeValMd
+      dictDataLocation   :: MaybeValMd
 
 data DIDerivedType
   | DIDerivedType

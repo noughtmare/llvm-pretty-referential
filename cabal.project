@@ -1,0 +1,13 @@
+packages: ./.
+
+optimization: 0
+
+source-repository-package
+    type: git
+    location: https://github.com/GaloisInc/llvm-pretty-bc-parser.git
+    tag: 54737bd3675d54a795203bbd54a027e36119d233
+
+source-repository-package
+    type: git
+    location: https://github.com/elliottt/llvm-pretty.git
+    tag: 1108dade73625485d081a74f48dc7e10aaf9c91e
