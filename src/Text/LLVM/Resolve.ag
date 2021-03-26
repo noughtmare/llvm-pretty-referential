@@ -1,0 +1,776 @@
+optpragmas {
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# OPTIONS_GHC -O0 #-} -- saves a few seconds
+}
+
+module {Text.LLVM.Resolve}
+{}
+{
+import Control.Monad.State
+import Data.Bifunctor (Bifunctor (bimap, second))
+import Data.Map (Map)
+import qualified Data.Map
+import qualified Data.Map as Map
+import Data.Maybe (fromMaybe)
+import qualified LLVM.Types as R
+import Data.Word (Word8,Word16,Word32,Word64)
+import Data.Int (Int32,Int64)
+
+import Text.LLVM.AST
+import Text.LLVM.AGData
+
+import LLVM.TypeInference
+}
+
+include "AG.ag"
+
+--------------------------------------------------------------------------------
+-- Boring mechanical resolution code
+--------------------------------------------------------------------------------
+
+attr Ident Symbol BlockLabel
+  syn copy :: self
+
+sem Module [ | | res :: {R.Module} ] | Module
+  loc.res
+    = R.Module
+        @modSourceName
+        @modDataLayout
+        @modTypes.ress
+        @modNamedMd
+        @modUnnamedMd
+        @modComdat
+        @modGlobals.ress
+        @modDeclares.ress
+        @modDefines.ress
+        @modInlineAsm
+        @modAliases.ress
+
+sem GlobalAliases [ | | ress use {++} {[]} :: {[R.GlobalAlias]} ]
+  | Cons +ress = (@hd.res :)
+
+sem GlobalAlias [ | | res :: {R.GlobalAlias} ] | GlobalAlias
+  loc.uniq1 :: uniqueref counter
+  loc.uniq2 :: uniqueref counter
+  loc.res
+    = R.GlobalAlias
+        @aliasName.copy
+        @aliasType.res
+        (R.Value @aliasType.res @loc.uniq1 @aliasValue.res)
+        @loc.uniq2
+
+sem Globals [ | | ress use {++} {[]} :: {[R.Global]} ]
+  | Cons +ress = (@hd.res :)
+
+type GlobalMdAttachments = map {KindMd} ValMd
+
+sem GlobalMdAttachments [ | | ress use {<>} {mempty} :: {Map KindMd R.ValMd} ]
+  | Entry +ress = Map.insert @key @val.res
+
+sem Global [ | | res :: {R.Global} ] | Global
+  loc.uniq1 :: uniqueref counter
+  loc.uniq2 :: uniqueref counter
+  loc.res
+    = R.Global
+        @globalSym.copy
+        @globalAttrs
+        @globalType.res
+        (fmap (R.Value @globalType.res @loc.uniq1) @globalValue.res)
+        @loc.uniq2
+        @globalAlign
+        @globalMetadata.ress
+
+sem Declares [ | | ress use {++} {[]} :: {[R.Declare]} ]
+  | Cons +ress = (@hd.res :)
+
+sem Declare | * loc.uniq :: uniqueref counter
+sem Declare [ | | res :: {R.Declare} ] | Declare
+  loc.res
+    = R.Declare
+        @decRetType.res
+        @decName.copy
+        @decArgs.ress
+        @decVarArgs
+        @decAttrs
+        @loc.uniq
+        @decComdat
+
+sem Defines [ | | ress use {++} {[]} :: {[R.Define]} ] | Cons +ress = (@hd.res :)
+
+type FnMdAttachments = map {KindMd} ValMd
+
+sem FnMdAttachments [ | | ress use {<>} {mempty} :: {Map KindMd R.ValMd} ]
+  | Entry +ress = Map.insert @key @val.res
+
+sem Define | * loc.uniq :: uniqueref counter
+sem Define [ | | res :: {R.Define} ] | Define
+  loc.res
+    = R.Define
+        @defLinkage
+        @defRetType.res
+        @defName.copy
+        @defArgs.ress
+        @defVarArgs
+        @defAttrs
+        @defSection
+        @defGC
+        @defBody.ress
+        @loc.uniq
+        @defMetadata.ress
+        @defComdat
+
+sem TypedIdents [ | | ress use {++} {[]} :: {[R.Argument]} ]
+  | Cons +ress = (@hd.res :)
+
+sem TypedIdent | * loc.uniq :: uniqueref counter
+sem TypedIdent [ | | res :: {R.Argument} ]
+  | Typed loc.res = R.Argument @lhs.parentDefine @ident.copy @typ.res @loc.uniq
+
+sem MaybeType [ | | res :: {Maybe R.Type} ]
+  | Nothing loc.res = Nothing
+  | Just loc.res = Just @just.res
+
+sem Types [ | | ress use {++} {[]} :: {[R.Type]} ]
+  | Cons +ress = (@hd.res :)
+
+sem Type | * loc.uniq :: uniqueref counter
+sem Type [ | | res :: {R.Type} ]
+  | PrimType     loc.res = R.PrimType @primType
+  | Alias        loc.res
+      = case @ident.resTy of
+          R.Struct (Left _) ftys packed -> R.Struct (Right @ident.copy) ftys packed
+          R.Opaque (Left _)             -> R.Opaque (Right @ident.copy)
+          _ -> error "Unexpected alias: anonymous struct nor anonymous opaque type"
+  | Array        loc.res = R.Array @size @elemType.res
+  | FunTy        loc.res = R.FunTy @resType.res @argTypes.ress @isVariadic
+  | PtrTo        loc.res = R.PtrTo @toType.res
+  | Struct       loc.res = R.Struct (Left @loc.uniq) @fieldTypes.ress False
+  | PackedStruct loc.res = R.Struct (Left @loc.uniq) @fieldTypes.ress True
+  | Vector       loc.res = R.Vector @size @elemType.res
+  | Opaque       loc.res = R.Opaque (Left @loc.uniq)
+
+sem BasicBlocks [ | | ress use {++} {[]} :: {[R.BasicBlock]} ]
+  | Cons +ress = (@hd.res :)
+
+sem BasicBlock [ | | res :: {R.BasicBlock} ] | BasicBlock
+  loc.res = R.BasicBlock @bbName @bbLabel @bbStmts.ress @bbUniqueId
+
+sem Stmts [ | | ress use {++} {[]} :: {[R.Stmt]} ]
+  | Cons +ress = (@hd.res :)
+
+sem Stmt [ | | res :: {R.Stmt} ]
+  | Result loc.res = R.Stmt (R.Result @ident.copy) @instr.res @mds.ress @stmtUniqueId @lhs.parentBasicBlock
+  | Effect loc.res = R.Stmt R.Effect               @instr.res @mds.ress @stmtUniqueId @lhs.parentBasicBlock
+
+sem StmtMds [ | | ress use {++} {[]} :: {[(String,R.ValMd)]} ]
+  | Cons +ress = (@hd.res :)
+
+sem StmtMd [ | | res :: {(String, R.ValMd)} ]
+  | Tuple loc.res = (@x1, @x2.res)
+
+sem Instr | * loc.uniq :: uniqueref counter
+sem Instr [ | | res :: {R.Instr} ]
+  | Ret           loc.res = R.Ret @retVal.res
+  | RetVoid       loc.res = R.RetVoid
+  | Arith         loc.res = R.Arith @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | Bit           loc.res = R.Bit @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | Conv          loc.res = R.Conv @op @val.res @tgt.res
+  | Call          loc.res = let x = @resType.funTy (map R.valType @args.ress) in R.Call @tailCall x (R.Value x @loc.uniq @fun.res) @args.ress
+  | Alloca        loc.res = R.Alloca @elemType.res @amount.res @align
+  | Load          loc.res = R.Load @addr.res @atomicOrdering @align
+  | Store         loc.res = R.Store @val.res @ptr.res @atomicOrdering @align
+  | Fence         loc.res = R.Fence @syncScope @atomicOrdering
+  | CmpXchg       loc.res = R.CmpXchg @weak @volatile @ptr.res @value.res @equalValue.res @syncScope @successOrdering @failOrdering
+  | AtomicRW      loc.res = R.AtomicRW @volatile @op @ptr.res @value.res @syncScope @syncOrdering
+  | ICmp          loc.res = R.ICmp @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | FCmp          loc.res = R.FCmp @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | Phi           loc.res = R.Phi @typ.res @preds.ress
+  | GEP           loc.res = R.GEP @inbounds @base.res @path.ress
+  | Select        loc.res = R.Select @cond.res @then.res (R.Value @then.typ @loc.uniq @else.res)
+  | ExtractValue  loc.res = R.ExtractValue @aggr.res @path
+  | InsertValue   loc.res = R.InsertValue @val.res @aggr.res @path
+  | ExtractElt    loc.res = R.ExtractElt @vec.res (R.Value (R.PrimType (Integer (error "TODO vector index can by any integer type"))) @loc.uniq @index.res)
+  | InsertElt     loc.res = R.InsertElt @vec.res @val.res (R.Value (R.PrimType (Integer (error "TODO vector index can by any integer type"))) @loc.uniq @index.res)
+  | ShuffleVector loc.res = R.ShuffleVector @vec1.res (R.Value @vec1.typ @loc.uniq @vec2.res) @mask.res
+  | Jump          loc.res = R.Jump @lab.res
+  | Br            loc.res = R.Br @cond.res @then.res @else.res
+  | Invoke        loc.res = let x = @ty.funTy (map R.valType @args.ress) in R.Invoke x (R.Value x @loc.uniq @fn.res) @args.ress @normal.res @unwind.res
+  | Comment       loc.res = R.Comment @comment
+  | Unreachable   loc.res = R.Unreachable
+  | Unwind        loc.res = R.Unwind
+  | VaArg         loc.res = R.VaArg @vaList.res @argTy.res
+  | IndirectBr    loc.res = R.IndirectBr @addr.res @dests.ress
+  | Switch        loc.res = R.Switch @val.res @defaultDest.res @cases.ress
+  | LandingPad    loc.res = R.LandingPad @resultTy.res @personality.res @cleanup @clauses.ress
+  | Resume        loc.res = R.Resume @val.res
+
+sem Values [ | | ress use {++} {[]} :: {[R.Value']} ] | Cons +ress = (@hd.res :)
+
+sem Value | * loc.uniq :: uniqueref counter
+sem Value [ | | res :: {R.Value'} ]
+  | ValInteger loc.res = R.ValInteger @val
+  | ValBool    loc.res = R.ValBool @val
+  | ValFloat   loc.res = R.ValFloat @val
+  | ValDouble  loc.res = R.ValDouble @val
+  | ValFP80    loc.res = R.ValFP80 @val
+  | ValIdent   loc.res = R.ValIdent @ident.res
+  | ValSymbol  loc.res = R.ValSymbol @sym.res
+  | ValNull    loc.res = R.ValNull
+  | ValArray   loc.res = R.ValArray @typ.res (map (R.Value @typ.res @loc.uniq) @vals.ress)
+  | ValVector  loc.res = R.ValVector @typ.res (map (R.Value @typ.res @loc.uniq) @vals.ress)
+  | ValStruct  loc.res = R.ValStruct @fields.ress False
+  | ValPackedStruct loc.res = R.ValStruct @fields.ress True
+  | ValString  loc.res = R.ValString @str
+  | ValConstExpr loc.res = R.ValConstExpr @constExpr.res
+  | ValUndef   loc.res = R.ValUndef
+  | ValLabel   loc.res = R.ValLabel @lab.res
+  | ValZeroInit loc.res = R.ValZeroInit
+  | ValAsm     loc.res = R.ValAsm @a @b @c @d
+  | ValMd      loc.res = R.ValMd @md.res
+
+sem MaybeValue [ | | res :: {Maybe R.Value'} ]
+  | Nothing loc.res = Nothing
+  | Just loc.res = Just @just.res
+
+sem TypedValues [ | | ress use {++} {[]} :: {[R.Value]} ]
+  | Cons +ress = (@hd.res :)
+
+sem TypedValue [ | | res :: {R.Value} ]
+  | Typed loc.res = R.Value @typ.res @loc.valUniqueId @val.res
+
+sem MaybeTypedValue [ | | res :: {Maybe R.Value} ]
+  | Nothing loc.res = Nothing
+  | Just loc.res = Just @just.res
+
+sem ValueLabs [ | | ress use {++} {[]} :: {[(R.Value, R.BasicBlock)]} ]
+  | Cons +ress = (@hd.res :)
+
+sem ValueLab [ | | res :: {(R.Value, R.BasicBlock)} ]
+  | Tuple
+      loc.uniq :: uniqueref counter
+      loc.res = (R.Value @lhs.typ @loc.uniq @x1.res, @x2.res)
+
+sem BlockLabels [ | | ress use {++} {[]} :: {[R.BasicBlock]} ]
+  | Cons +ress = (@hd.res :)
+
+sem Cases [ | | ress use {++} {[]} :: {[(Integer, R.BasicBlock)]} ]
+  | Cons +ress = (@hd.res :)
+
+sem Case [ | | res :: {(Integer, R.BasicBlock)} ]
+  | Tuple loc.res = (@x1, @x2.res)
+
+sem Clauses [ | | ress use {++} {[]} :: {[R.Clause]} ] | Cons +ress = (@hd.res :)
+
+sem Clause [ | | res :: {R.Clause} ]
+  | Catch loc.res = R.Catch @val.res
+  | Filter loc.res = R.Filter @val.res
+
+sem TypeDecls [ | | ress use {++} {[]} :: {[R.TypeDecl]} ]
+  | Cons +ress = (@hd.res :)
+
+sem TypeDecl [ | | res :: {R.TypeDecl} ]
+  | TypeDecl loc.res = R.TypeDecl @typeName.copy @typeValue.res
+
+{-
+sem NamedMds [ | | ress use {++} {[]} :: {[R.NamedMd]} ]
+  | Cons +ress = (@hd.res :)
+
+sem NamedMd [ | | res :: {R.NamedMd} ]
+  | NamedMd loc.res = R.NamedMd @nmName @nmValues
+
+sem UnnamedMds [ | | ress use {++} {[]} :: {[R.UnnamedMds]} ]
+  | Cons +ress = (@hd.res :)
+
+sem UnnamedMd [ | | res :: {R.UnnamedMd} ]
+  | UnnamedMd loc.res = R.UnnamedMd @umIndex @umValues.res @umDistinct
+-}
+
+sem ValMd [ | | res :: {R.ValMd} ]
+  | ValMdString loc.res = R.ValMdString @str
+  | ValMdValue  loc.res = R.ValMdValue @val.res
+  | ValMdRef    loc.res = R.ValMdRef @ref
+  | ValMdNode   loc.res = R.ValMdNode @children.ress
+  | ValMdLoc    loc.res = R.ValMdLoc @dbgLoc.res
+  | ValMdDebugInfo loc.res = R.ValMdDebugInfo @info.res
+
+sem MaybeValMds [ | | ress use {++} {[]} :: {[Maybe R.ValMd]} ]
+  | Cons +ress = (@hd.res :)
+
+sem MaybeValMd [ | | res :: {Maybe R.ValMd} ]
+  | Nothing loc.res = Nothing
+  | Just loc.res = Just @just.res
+
+sem ConstExpr [ | | res :: {R.ConstExpr} ]
+  | ConstGEP loc.res = R.ConstGEP @inbounds @mix @mp.res @ixs.ress
+  | ConstConv loc.res = R.ConstConv @op @val.res @ty.res
+  | ConstSelect loc.res = R.ConstSelect @cond.res @then.res @else.res
+  | ConstBlockAddr loc.res = R.ConstBlockAddr @sym.res @lab.res
+  | ConstFCmp loc.res = R.ConstFCmp @op @lft.res @rgt.res
+  | ConstICmp loc.res = R.ConstICmp @op @lft.res @rgt.res
+  | ConstArith
+      loc.uniq :: uniqueref counter
+      loc.res = R.ConstArith @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | ConstBit
+      loc.uniq :: uniqueref counter
+      loc.res = R.ConstBit @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+
+sem DebugLoc [ | | res :: {R.DebugLoc} ]
+  | DebugLoc loc.res = R.DebugLoc @dlLine @dlCol @dlScope.res @dlIA.res @dlImplicit
+
+sem DebugInfo [ | | res :: {R.DebugInfo} ]
+  | DebugInfoBasicType
+      loc.res = R.DebugInfoBasicType @basicType.res
+  | DebugInfoCompileUnit
+      loc.res = R.DebugInfoCompileUnit @compileUnit.res
+  | DebugInfoCompositeType 
+      loc.res = R.DebugInfoCompositeType @compositeType.res
+  | DebugInfoDerivedType
+      loc.res = R.DebugInfoDerivedType @derivedType.res
+  | DebugInfoEnumerator
+      loc.res = R.DebugInfoEnumerator @name @value
+  | DebugInfoExpression
+      loc.res = R.DebugInfoExpression @expression.res
+  | DebugInfoFile
+      loc.res = R.DebugInfoFile @file.res
+  | DebugInfoGlobalVariable
+      loc.res = R.DebugInfoGlobalVariable @globVar.res
+  | DebugInfoGlobalVariableExpression
+      loc.res = R.DebugInfoGlobalVariableExpression @globVarExpr.res
+  | DebugInfoLexicalBlock
+      loc.res = R.DebugInfoLexicalBlock @lexBlock.res
+  | DebugInfoLexicalBlockFile
+      loc.res = R.DebugInfoLexicalBlockFile @lexBlockFile.res
+  | DebugInfoLocalVariable
+      loc.res = R.DebugInfoLocalVariable @locVar.res
+  | DebugInfoSubprogram
+      loc.res = R.DebugInfoSubprogram @subprogram.res
+  | DebugInfoSubrange
+      loc.res = R.DebugInfoSubrange @subrange.res
+  | DebugInfoSubroutineType
+      loc.res = R.DebugInfoSubroutineType @subroutineType.res
+  | DebugInfoNameSpace
+      loc.res = R.DebugInfoNameSpace @namespace.res
+  | DebugInfoTemplateTypeParameter
+      loc.res = R.DebugInfoTemplateTypeParameter @templateTypeParam.res
+  | DebugInfoTemplateValueParameter
+      loc.res = R.DebugInfoTemplateValueParameter @templateValParam.res
+  | DebugInfoImportedEntity
+      loc.res = R.DebugInfoImportedEntity @importedEntity.res
+  | DebugInfoLabel
+      loc.res = R.DebugInfoLabel @label.res
+
+sem DILabel [ | | res :: {R.DILabel} ]
+  | DILabel
+      loc.res = R.DILabel @dilScope.res @dilName @dilFile.res @dilLine
+
+sem DIImportedEntity [ | | res :: {R.DIImportedEntity} ]
+  | DIImportedEntity
+      loc.res
+        = R.DIImportedEntity
+            @diieTag
+            @diieScope.res
+            @diieEntity.res
+            @diieFile.res
+            @diieLine
+            @diieName
+
+sem DITemplateTypeParameter [ | | res :: {R.DITemplateTypeParameter} ]
+  | DITemplateTypeParameter
+      loc.res = R.DITemplateTypeParameter @dittpName @dittpType.res
+
+sem DITemplateValueParameter [ | | res :: {R.DITemplateValueParameter} ]
+  | DITemplateValueParameter
+      loc.res
+        = R.DITemplateValueParameter
+            @ditvpTag
+            @ditvpName
+            @ditvpType.res
+            @ditvpValue.res
+
+sem DINameSpace [ | | res :: {R.DINameSpace} ]
+  | DINameSpace
+      loc.res = R.DINameSpace @dinsName @dinsScope.res @dinsFile.res @dinsLine
+
+sem DIBasicType [ | | res :: {R.DIBasicType} ]
+  | DIBasicType
+      loc.res
+        = R.DIBasicType
+            @dibtTag
+            @dibtName
+            @dibtSize
+            @dibtAlign
+            @dibtEncoding
+            @dibtFlags
+
+sem DICompileUnit [ | | res :: {R.DICompileUnit} ]
+  | DICompileUnit
+      loc.res
+        = R.DICompileUnit
+            @dicuLanguage
+            @dicuFile.res
+            @dicuProducer
+            @dicuIsOptimized
+            @dicuFlags
+            @dicuRuntimeVersion
+            @dicuSplitDebugFilename
+            @dicuEmissionKind
+            @dicuEnums.res
+            @dicuRetainedTypes.res
+            @dicuSubprograms.res
+            @dicuGlobals.res
+            @dicuImports.res
+            @dicuMacros.res
+            @dicuDWOId
+            @dicuSplitDebugInlining
+
+sem DICompositeType [ | | res :: {R.DICompositeType} ]
+  | DICompositeType
+     loc.res
+       = R.DICompositeType
+           @dictTag
+           @dictName
+           @dictFile.res
+           @dictLine
+           @dictScope.res
+           @dictBaseType.res
+           @dictSize
+           @dictAlign
+           @dictOffset
+           @dictFlags
+           @dictElements.res
+           @dictRuntimeLang
+           @dictVTableHolder.res
+           @dictTemplateParams.res
+           @dictIdentifier
+           @dictDiscriminator.res
+
+sem DIDerivedType [ | | res :: {R.DIDerivedType} ]
+  | DIDerivedType
+      loc.res
+        = R.DIDerivedType
+            @didtTag
+            @didtName
+            @didtFile.res
+            @didtLine
+            @didtScope.res
+            @didtBaseType.res
+            @didtSize
+            @didtAlign
+            @didtOffset
+            @didtFlags
+            @didtExtraData.res
+
+sem DIExpression [ | | res :: {R.DIExpression} ]
+  | DIExpression loc.res = R.DIExpression @dieElements
+
+sem DIFile [ | | res :: {R.DIFile} ]
+  | DIFile loc.res = R.DIFile @difFilename @difDirectory
+
+sem DIGlobalVariable [ | | res :: {R.DIGlobalVariable} ]
+  | DIGlobalVariable
+      loc.res
+        = R.DIGlobalVariable
+            @digvScope.res
+            @digvName
+            @digvLinkageName
+            @digvFile.res
+            @digvLine
+            @digvType.res
+            @digvIsLocal
+            @digvIsDefinition
+            @digvVariable.res
+            @digvDeclaration.res
+            @digvAlignment
+
+sem DIGlobalVariableExpression [ | | res :: {R.DIGlobalVariableExpression} ]
+  | DIGlobalVariableExpression
+      loc.res
+        = R.DIGlobalVariableExpression
+            @digveVariable.res
+            @digveExpression.res
+
+sem DILexicalBlock [ | | res :: {R.DILexicalBlock} ]
+  | DILexicalBlock
+      loc.res
+        = R.DILexicalBlock @dilbScope.res @dilbFile.res @dilbLine @dilbColumn
+
+sem DILexicalBlockFile [ | | res :: {R.DILexicalBlockFile} ]
+  | DILexicalBlockFile
+      loc.res
+        = R.DILexicalBlockFile
+            @dilbfScope.res
+            @dilbfFile.res
+            @dilbfDiscriminator
+
+sem DILocalVariable [ | | res :: {R.DILocalVariable} ]
+  | DILocalVariable
+      loc.res
+        = R.DILocalVariable
+            @dilvScope.res
+            @dilvName
+            @dilvFile.res
+            @dilvLine
+            @dilvType.res
+            @dilvArg
+            @dilvFlags
+
+sem DISubprogram [ | | res :: {R.DISubprogram} ]
+  | DISubprogram
+      loc.res
+        = R.DISubprogram
+            @dispScope.res
+            @dispName
+            @dispLinkageName
+            @dispFile.res
+            @dispLine
+            @dispType.res
+            @dispIsLocal
+            @dispIsDefinition
+            @dispScopeLine
+            @dispContainingType.res
+            @dispVirtuality
+            @dispVirtualIndex
+            @dispThisAdjustment
+            @dispFlags
+            @dispIsOptimized
+            @dispUnit.res
+            @dispTemplateParams.res
+            @dispDeclaration.res
+            @dispVariables.res
+            @dispThrownTypes.res
+
+sem DISubrange [ | | res :: {R.DISubrange} ]
+  | DISubrange loc.res = R.DISubrange @disrCount @disrLowerBound
+
+sem DISubroutineType [ | | res :: {R.DISubroutineType} ]
+  | DISubroutineType loc.res = R.DISubroutineType @distFlags @distTypeArray.res
+
+--------------------------------------------------------------------------------
+-- Interesting resolution
+--------------------------------------------------------------------------------
+
+sem BlockLabel [ | | res :: {R.BasicBlock} ]
+  | Named loc.res = @lhs.namedLabEnv Map.! @loc.copy
+  | Anon loc.res = @lhs.anonLabEnv !! @number
+
+sem Ident [ | | res :: {R.IdentValue}  ]
+  | Ident loc.res = @lhs.identEnv Map.! (Ident @name)
+
+sem Ident [ | | resTy :: {R.Type} ]
+  | Ident loc.resTy = @lhs.typeEnv Map.! @loc.copy
+
+sem Symbol [ | | res :: {R.SymValue} ]
+  | Symbol loc.res = @lhs.symEnv Map.! (Symbol @name)
+
+--------------------------------------------------------------------------------
+-- Useful sets
+--------------------------------------------------------------------------------
+
+set DI = DebugInfo DICompileUnit DICompositeType DIDerivedType DIGlobalVariable
+         DIGlobalVariableExpression DIImportedEntity DILabel DILexicalBlock
+         DILexicalBlockFile DILocalVariable DINameSpace DISubprogram
+         DISubroutineType DITemplateTypeParameter DITemplateValueParameter
+         DebugLoc
+
+set ValueRelated = Value Values TypedValues ValueLabs ValueLab TypedValue
+                   MaybeValue MaybeTypedValue Clause Clauses ConstExpr
+
+set ValMdRelated = ValMd MaybeValMd StmtMds StmtMd MaybeValMds
+                   GlobalMdAttachments FnMdAttachments
+
+set SubTop = Globals Global Declares Declare Defines Define GlobalAliases
+             GlobalAlias
+
+set InstrRelated = BasicBlocks BasicBlock Stmts Stmt Instr
+
+--------------------------------------------------------------------------------
+-- Names
+--------------------------------------------------------------------------------
+
+sem BasicBlock | BasicBlock
+  loc.bbName
+    = case @bbLabel of
+        Just (Named (Ident name)) -> name
+        Just (Anon n) -> show n
+        Nothing -> "bb" ++ show @bbUniqueId
+
+--------------------------------------------------------------------------------
+-- Types
+--------------------------------------------------------------------------------
+
+sem TypedValue [ | | typ :: {R.Type} ] | Typed lhs.typ = @typ.res
+
+sem Instr | Phi preds.typ = @typ.res
+
+attr ValueLabs ValueLab
+  inh typ :: {R.Type}
+
+sem Type [ | | funTy :: {[R.Type] -> R.Type} ]
+  | * lhs.funTy = makeFunTy @loc.res
+
+--------------------------------------------------------------------------------
+-- Unique ids
+--------------------------------------------------------------------------------
+
+{
+nextUnique :: Int -> (Int, Int)
+nextUnique x = (x + 1, x)
+}
+
+attr *
+  chn counter :: Int
+
+sem Module | Module loc.counter = 0
+
+sem BasicBlock | BasicBlock loc.bbUniqueId :: uniqueref counter
+
+sem Stmt
+  | Result loc.stmtUniqueId :: uniqueref counter
+  | Effect loc.stmtUniqueId :: uniqueref counter
+
+sem TypedValue
+  | Typed loc.valUniqueId :: uniqueref counter
+
+--------------------------------------------------------------------------------
+-- Label environment synthesis
+--------------------------------------------------------------------------------
+
+attr InstrRelated BlockLabels BlockLabel Case Cases ValueRelated ValMdRelated DI
+  inh namedLabEnv :: {Map BlockLabel R.BasicBlock}
+  inh anonLabEnv :: {[R.BasicBlock]}
+
+attr BasicBlocks BasicBlock
+  syn namedLabEnv use {<>} {mempty} :: {Map BlockLabel R.BasicBlock}
+  syn anonLabEnv use {++} {[]} :: {[R.BasicBlock]}
+
+sem Define
+  | Define loc.namedLabEnv :: {Map BlockLabel R.BasicBlock}
+           loc.anonLabEnv :: {[R.BasicBlock]}
+           defBody.anonLabEnv = @defBody.anonLabEnv
+           defBody.namedLabEnv = @defBody.namedLabEnv
+
+sem BasicBlock
+  | BasicBlock
+      +namedLabEnv
+        = case @bbLabel of
+            Nothing -> id
+            Just lab -> Map.insert lab @loc.res
+      +anonLabEnv = (@loc.res :)
+
+--------------------------------------------------------------------------------
+-- Stmt parent basic block
+--------------------------------------------------------------------------------
+
+attr Stmts Stmt
+  inh parentBasicBlock :: {R.BasicBlock}
+
+sem BasicBlock | BasicBlock bbStmts.parentBasicBlock = @loc.res
+
+--------------------------------------------------------------------------------
+-- Value identifier environment synthesis
+--------------------------------------------------------------------------------
+
+attr Ident InstrRelated ValueRelated ValMdRelated DI TypedIdent TypedIdents
+  inh identEnv :: {Map Ident R.IdentValue}
+
+attr BasicBlocks BasicBlock Stmts Stmt TypedIdents TypedIdent
+  syn identEnv use {<>} {mempty} :: {Map Ident R.IdentValue}
+
+attr TypedIdents TypedIdent
+  inh parentDefine :: {R.Define}
+
+sem Define
+  | Define loc.identEnv :: {Map Ident R.IdentValue}
+           loc.parentDefine = @loc.res
+
+sem Stmt
+  | Result +identEnv = Map.insert @ident.copy (R.IdentValStmt @loc.res)
+
+sem TypedIdent
+  | Typed +identEnv = Map.insert @ident.copy (R.IdentValArgument @loc.res)
+
+--------------------------------------------------------------------------------
+-- Type identifier environment synthesis
+--------------------------------------------------------------------------------
+
+attr Ident TypeDecls TypeDecl Types Type SubTop Define TypedIdents TypedIdent
+  InstrRelated ValueRelated ValMdRelated MaybeType DI Cases Case
+  inh typeEnv :: {Map Ident R.Type}
+
+attr TypeDecls TypeDecl
+  syn typeEnv use {<>} {mempty} :: {Map Ident R.Type}
+      
+sem Module
+  | Module loc.typeEnv = @modTypes.typeEnv
+
+sem TypeDecl
+  | TypeDecl +typeEnv = Map.insert @typeName.copy @typeValue.res
+
+--------------------------------------------------------------------------------
+-- Symbol environment synthesis
+--------------------------------------------------------------------------------
+
+sem Module | Module
+  loc.symEnv
+    = mconcat
+        [ @modAliases.symEnv
+        , @modGlobals.symEnv
+        , @modDeclares.symEnv
+        , @modDefines.symEnv
+        ]
+
+attr GlobalAliases GlobalAlias Globals Global Declares Declare Defines Define
+  syn symEnv use {<>} {mempty} :: {Map Symbol R.SymValue}
+
+attr Symbol SubTop InstrRelated
+  ValMdRelated DI ValueRelated
+  inh symEnv :: {Map Symbol R.SymValue}
+
+sem GlobalAlias | GlobalAlias
+  +symEnv = Map.insert @aliasName.copy (R.SymValAlias @loc.res)
+
+sem Global | Global
+  +symEnv = Map.insert @globalSym.copy (R.SymValGlobal @loc.res)
+
+sem Declare | Declare
+  +symEnv = Map.insert @decName.copy (R.SymValDeclare @loc.res)
+
+sem Define | Define
+  +symEnv = Map.insert @defName.copy (R.SymValDefine @loc.res)
+
+--------------------------------------------------------------------------------
+-- Explicitly missing rules (our grammar is an overapproximation)
+--------------------------------------------------------------------------------
+
+sem GlobalAlias | GlobalAlias aliasValue
+  .namedLabEnv = error "global aliases should not reference local labels"
+  .anonLabEnv = error "global aliases should not reference local labels"
+  .identEnv = error "global aliases should not reference local values"
+
+sem Global | Global
+  globalValue
+    .namedLabEnv = error "global values should not reference local labels"
+    .anonLabEnv = error "global values should not reference local labels"
+    .identEnv = error "global values should not reference local values"
+  globalMetadata
+    .namedLabEnv = error "global metadata should not reference local labels"
+    .anonLabEnv = error "global metadata should not reference local labels"
+    .identEnv = error "global metadata should not reference local values"
+
+sem Type | Alias ident
+  .identEnv = error "type aliases should not reference values"
+
+sem BlockLabel | Named ident
+  .identEnv = error "block labels should not reference values"
+  .typeEnv = error "block labels should not reference types"
+
+sem Define | Define defArgs
+  .identEnv = error "arguments should not reference values"
+
+sem TypeDecl | TypeDecl typeName
+  .identEnv = error "type declarations should not reference values"
+

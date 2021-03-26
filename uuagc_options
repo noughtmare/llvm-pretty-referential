@@ -1,0 +1,8 @@
+file: "src/Text/LLVM/AG.ag"
+options: haskellsyntax
+
+file: "src/Text/LLVM/AGData.ag"
+options: haskellsyntax, data
+
+file: "src/Text/LLVM/Resolve.ag"
+options: haskellsyntax, self, catas, semfuns, signatures, pretty, wrappers, kennedywarren

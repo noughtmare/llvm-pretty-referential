@@ -1,0 +1,60 @@
+module {Text.LLVM.AGData}
+{ Types
+, MaybeValue
+, BasicBlocks
+, Stmts
+, TypedValues
+, MaybeTypedValue
+, ValueLab
+, ValueLabs
+, Cases
+, Case
+, Clauses
+, BlockLabels
+, Values
+, MaybeValMds
+, StmtMds
+, StmtMd
+, MaybeType
+, MaybeValMd
+, TypeDecls
+-- , NamedMds
+-- , UnnamedMds
+, Globals
+, Declares
+, Defines
+, GlobalAliases
+, TypedIdents
+}
+{
+import Text.LLVM.AST
+}
+
+{type TypedValue = Typed Value}
+{type TypedIdent = Typed Ident}
+type TypedIdents = [TypedIdent]
+type Types = [Type]
+type MaybeValue = maybe Value
+type BasicBlocks = [BasicBlock]
+type Stmts = [Stmt]
+type TypedValues = [TypedValue]
+type MaybeTypedValue = maybe TypedValue
+type ValueLab = (Value, BlockLabel)
+type ValueLabs = [ValueLab]
+type Cases = [Case]
+type Case = (Integer, BlockLabel)
+type Clauses = [Clause]
+type BlockLabels = [BlockLabel]
+type Values = [Value]
+type MaybeValMds = [MaybeValMd]
+type StmtMds = [StmtMd]
+type StmtMd = (String, ValMd)
+type MaybeType = maybe Type
+type MaybeValMd = maybe ValMd
+type TypeDecls = [TypeDecl]
+-- type NamedMds = [NamedMd]
+-- type UnnamedMds = [UnnamedMd]
+type Declares = [Declare]
+type Defines = [Define]
+type Globals = [Global]
+type GlobalAliases = [GlobalAlias]

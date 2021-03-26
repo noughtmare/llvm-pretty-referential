@@ -1,0 +1,806 @@
+optpragmas {
+{-# OPTIONS_GHC -w #-}
+}
+
+module {Text.LLVM.AG}
+{}
+{
+import qualified Data.Map as Map
+import Text.LLVM.AST
+import Data.Word (Word8,Word16,Word32,Word64)
+import Data.Int (Int32,Int64)
+import Text.LLVM.AGData
+}
+
+include "src/Text/LLVM/AGData.ag"
+
+-- import Data.Functor.Identity (Identity(..))
+-- import Data.Coerce (coerce)
+-- import Data.Data (Data)
+-- import Data.Typeable (Typeable)
+-- import Control.Monad (MonadPlus(mzero,mplus),(<=<),guard)
+-- import Data.Int (Int32,Int64)
+-- import Data.List (genericIndex,genericLength)
+-- import Data.Semigroup as Sem
+-- import Data.String (IsString(fromString))
+-- import GHC.Generics (Generic, Generic1)
+-- 
+-- import Text.Parsec
+-- import Text.Parsec.String
+
+-- Modules ---------------------------------------------------------------------
+
+data Module
+  | Module
+      modSourceName :: {Maybe String}
+      modDataLayout :: DataLayout     -- ^ type size and alignment information
+      modTypes      :: TypeDecls      -- ^ top-level type aliases
+      modNamedMd    :: {[NamedMd]}
+      modUnnamedMd  :: {[UnnamedMd]}
+      modComdat     :: {Map.Map String SelectionKind}
+      modGlobals    :: Globals        -- ^ global value declarations
+      modDeclares   :: Declares       -- ^ external function declarations (without definitions)
+      modDefines    :: Defines        -- ^ internal function declarations (with definitions)
+      modInlineAsm  :: InlineAsm
+      modAliases    :: GlobalAliases
+
+{-
+-- Named Metadata --------------------------------------------------------------
+
+data NamedMd
+  | NamedMd
+      nmName   :: String
+      nmValues :: {[Int]}
+
+-- Unnamed Metadata ------------------------------------------------------------
+
+data UnnamedMd
+  | UnnamedMd
+      umIndex    :: Int
+      umValues   :: ValMd
+      umDistinct :: Bool
+-}
+
+-- Aliases ---------------------------------------------------------------------
+
+data GlobalAlias 
+  | GlobalAlias
+      aliasName  :: Symbol
+      aliasType  :: Type
+      aliasValue :: Value
+
+-- Data Layout -----------------------------------------------------------------
+  
+{-
+
+type DataLayout = [LayoutSpec]
+
+
+data LayoutSpec
+  | BigEndian
+  | LittleEndian
+  | PointerSize   addressSpace :: Int size :: Int abi :: Int pref :: {(Maybe Int)}
+  | IntegerSize                       size :: Int abi :: Int pref :: {(Maybe Int)}
+  | VectorSize                        size :: Int abi :: Int pref :: {(Maybe Int)}
+  | FloatSize                         size :: Int abi :: Int pref :: {(Maybe Int)}
+  | StackObjSize                      size :: Int abi :: Int pref :: {(Maybe Int)}
+  | AggregateSize                     size :: Int abi :: Int pref :: {(Maybe Int)}
+  | NativeIntSize sizes :: {[Int]}
+  | StackAlign    size :: Int
+  | Mangling Mangling
+ 
+
+data Mangling 
+  | ElfMangling
+  | MipsMangling
+  | MachOMangling
+  | WindowsCoffMangling
+
+-}
+
+
+-- Inline Assembly -------------------------------------------------------------
+
+-- type InlineAsm = [String]
+ 
+
+-- Comdat ----------------------------------------------------------------------
+
+-- data SelectionKind 
+--   | ComdatAny
+--   | ComdatExactMatch
+--   | ComdatLargest
+--   | ComdatNoDuplicates
+--   | ComdatSameSize
+
+
+-- Identifiers -----------------------------------------------------------------
+
+data Ident
+  | Ident name :: String
+
+-- Symbols ---------------------------------------------------------------------
+
+
+data Symbol
+  | Symbol name :: String
+
+-- Types -----------------------------------------------------------------------
+
+{-
+data PrimType
+  | Label
+  | Void
+  | Integer bits :: Word32
+  | FloatType floatType :: FloatType
+  | X86mmx
+  | Metadata
+
+
+data FloatType
+  | Half
+  | Float
+  | Double
+  | Fp128
+  | X86_fp80
+  | PPC_fp128
+-}
+
+data Type
+  | PrimType primType :: PrimType
+  | Alias ident :: Ident
+  | Array size :: Word64 elemType :: Type
+  | FunTy resType :: Type argTypes :: Types isVariadic :: Bool
+  | PtrTo toType :: Type
+  | Struct fieldTypes :: Types
+  | PackedStruct fieldTypes :: Types
+  | Vector size :: Word64 elemType :: Type
+  | Opaque
+
+
+-- Top-level Type Aliases ------------------------------------------------------
+
+data TypeDecl
+  | TypeDecl
+    typeName  :: Ident
+    typeValue :: Type
+
+-- Globals ---------------------------------------------------------------------
+
+data Global
+  | Global
+    globalSym      :: Symbol
+    globalAttrs    :: {GlobalAttrs}
+    globalType     :: Type
+    globalValue    :: MaybeValue
+    globalAlign    :: {Maybe Align}
+    globalMetadata :: GlobalMdAttachments
+
+-- data GlobalAttrs
+--   | GlobalAttrs
+--     gaLinkage    :: {Maybe Linkage}
+--     gaVisibility :: {Maybe Visibility}
+--     gaConstant   :: Bool
+
+-- Declarations ----------------------------------------------------------------
+
+data Declare
+  | Declare
+    decRetType :: Type
+    decName    :: Symbol
+    decArgs    :: Types
+    decVarArgs :: Bool
+    decAttrs   :: {[FunAttr]}
+    decComdat  :: {Maybe String}
+
+
+-- Function Definitions --------------------------------------------------------
+
+data Define
+  | Define
+    defLinkage  :: {Maybe Linkage}
+    defRetType  :: Type
+    defName     :: Symbol
+    defArgs     :: TypedIdents
+    defVarArgs  :: Bool
+    defAttrs    :: {[FunAttr]}
+    defSection  :: {Maybe String}
+    defGC       :: {Maybe GC}
+    defBody     :: BasicBlocks
+    defMetadata :: FnMdAttachments
+    defComdat   :: {Maybe String}
+
+-- Function Attributes and attribute groups ------------------------------------
+
+{-
+
+data FunAttr
+   | AlignStack align :: Int
+   | Alwaysinline
+   | Builtin
+   | Cold
+   | Inlinehint
+   | Jumptable
+   | Minsize
+   | Naked
+   | Nobuiltin
+   | Noduplicate
+   | Noimplicitfloat
+   | Noinline
+   | Nonlazybind
+   | Noredzone
+   | Noreturn
+   | Nounwind
+   | Optnone
+   | Optsize
+   | Readnone
+   | Readonly
+   | ReturnsTwice
+   | SanitizeAddress
+   | SanitizeMemory
+   | SanitizeThread
+   | SSP
+   | SSPreq
+   | SSPstrong
+   | UWTable
+
+-}
+
+-- Basic Block Labels ----------------------------------------------------------
+
+data BlockLabel
+  | Named ident :: Ident
+  | Anon number :: Int
+
+-- Basic Blocks ----------------------------------------------------------------
+
+data BasicBlock
+  | BasicBlock
+      bbLabel :: {Maybe BlockLabel}
+      bbStmts :: Stmts
+
+-- type BasicBlock = BasicBlock' BlockLabel
+
+-- Attributes ------------------------------------------------------------------
+
+{-
+
+-- | Symbol Linkage
+data Linkage
+  | Private
+  | LinkerPrivate
+  | LinkerPrivateWeak
+  | LinkerPrivateWeakDefAuto
+  | Internal
+  | AvailableExternally
+  | Linkonce
+  | Weak
+  | Common
+  | Appending
+  | ExternWeak
+  | LinkonceODR
+  | WeakODR
+  | External
+  | DLLImport
+  | DLLExport
+
+data Visibility | DefaultVisibility
+                | HiddenVisibility
+                | ProtectedVisibility
+
+data GC
+  | GC getGC :: String
+-}
+
+-- Typed Things ----------------------------------------------------------------
+
+-- data Typed a 
+--   | Typed
+--     typedType  :: Type
+--     typedValue :: {a}
+
+-- Instructions ----------------------------------------------------------------
+
+{-
+data ArithOp
+  | Add unsignedOverflow :: Bool signedOverflow :: Bool
+  | FAdd
+  | Sub unsignedOverflow :: Bool signedOverflow :: Bool
+  | FSub
+  | Mul unsignedOverflow :: Bool signedOverflow :: Bool
+  | FMul
+  | UDiv exactResult :: Bool
+  | SDiv exactResult :: Bool
+  | FDiv
+  | URem
+  | SRem
+  | FRem
+
+data BitOp
+  | Shl unsignedOverflow :: Bool signedOverflow :: Bool
+  | Lshr exactCheck :: Bool
+  | Ashr exactCheck :: Bool
+  | And
+  | Or
+  | Xor
+
+data ConvOp
+  | Trunc
+  | ZExt
+  | SExt
+  | FpTrunc
+  | FpExt
+  | FpToUi
+  | FpToSi
+  | UiToFp
+  | SiToFp
+  | PtrToInt
+  | IntToPtr
+  | BitCast
+
+data AtomicRWOp
+  | AtomicXchg
+  | AtomicAdd
+  | AtomicSub
+  | AtomicAnd
+  | AtomicNand
+  | AtomicOr
+  | AtomicXor
+  | AtomicMax
+  | AtomicMin
+  | AtomicUMax
+  | AtomicUMin
+
+data AtomicOrdering
+  | Unordered
+  | Monotonic
+  | Acquire
+  | Release
+  | AcqRel
+  | SeqCst
+-}
+
+data TypedIdent
+  | Typed
+      typ :: Type
+      ident :: Ident
+
+data TypedValue
+  | Typed
+      typ :: Type
+      val :: Value
+
+data Instr
+  | Ret
+      retVal :: TypedValue
+  | RetVoid
+  | Arith
+      op :: ArithOp
+      lft :: TypedValue
+      rgt :: Value
+  | Bit
+      op :: BitOp
+      lft :: TypedValue
+      rgt :: Value
+  | Conv
+      op :: ConvOp
+      val :: TypedValue
+      tgt :: Type
+  | Call
+      tailCall :: Bool
+      resType :: Type
+      fun :: Value
+      args :: TypedValues
+  | Alloca
+      elemType :: Type
+      amount :: MaybeTypedValue
+      align :: {Maybe Int}
+  | Load
+      addr :: TypedValue
+      atomicOrdering :: (Maybe AtomicOrdering)
+      align :: (Maybe Align)
+  | Store
+      val :: TypedValue
+      ptr :: TypedValue
+      atomicOrdering :: (Maybe AtomicOrdering)
+      align :: (Maybe Align)
+  | Fence
+      syncScope :: (Maybe String)
+      atomicOrdering :: AtomicOrdering
+  | CmpXchg 
+      weak :: Bool
+      volatile :: Bool
+      ptr :: TypedValue
+      value :: TypedValue
+      equalValue :: TypedValue
+      syncScope :: (Maybe String)
+      successOrdering :: AtomicOrdering
+      failOrdering :: AtomicOrdering
+  | AtomicRW
+      volatile :: Bool
+      op :: AtomicRWOp
+      ptr :: TypedValue
+      value :: TypedValue
+      syncScope :: (Maybe String)
+      syncOrdering :: AtomicOrdering
+  | ICmp
+      op :: ICmpOp
+      lft :: TypedValue
+      rgt :: Value
+  | FCmp
+      op :: FCmpOp
+      lft :: TypedValue
+      rgt :: Value
+  | Phi
+      typ :: Type
+      preds :: ValueLabs
+  | GEP
+      inbounds :: Bool
+      base :: TypedValue
+      path :: TypedValues
+  | Select
+      cond :: TypedValue
+      then :: TypedValue
+      else :: Value
+  | ExtractValue
+      aggr :: TypedValue
+      path :: {[Int32]}
+  | InsertValue
+      val :: TypedValue
+      aggr :: TypedValue
+      path :: {[Int32]}
+  | ExtractElt
+      vec :: TypedValue
+      index :: Value
+  | InsertElt
+      vec :: TypedValue
+      val :: TypedValue
+      index :: Value
+  | ShuffleVector
+      vec1 :: TypedValue
+      vec2 :: Value
+      mask :: TypedValue
+  | Jump lab :: BlockLabel
+  | Br 
+      cond :: TypedValue
+      then :: BlockLabel
+      else :: BlockLabel
+  | Invoke
+      ty :: Type
+      fn :: Value
+      args :: TypedValues
+      normal :: BlockLabel
+      unwind :: BlockLabel
+  | Comment comment :: String
+  | Unreachable
+  | Unwind
+  | VaArg
+      vaList :: TypedValue
+      argTy :: Type
+  | IndirectBr
+      addr :: TypedValue
+      dests :: BlockLabels
+  | Switch
+      val :: TypedValue
+      defaultDest :: BlockLabel
+      cases :: Cases
+  | LandingPad
+      resultTy :: Type
+      personality :: MaybeTypedValue
+      cleanup :: Bool
+      clauses :: Clauses
+  | Resume
+      val :: TypedValue
+
+data Clause
+  | Catch  val :: TypedValue
+  | Filter val :: TypedValue
+
+{-
+-- | Integer comparison operators.
+data ICmpOp = Ieq | Ine | Iugt | Iuge | Iult | Iule | Isgt | Isge | Islt | Isle
+    deriving (Data, Eq, Enum, Generic, Ord, Show, Typeable)
+
+-- | Floating-point comparison operators.
+data FCmpOp = Ffalse  | Foeq | Fogt | Foge | Folt | Fole | Fone
+            | Ford    | Fueq | Fugt | Fuge | Fult | Fule | Fune
+            | Funo    | Ftrue
+    deriving (Data, Eq, Enum, Generic, Ord, Show, Typeable)
+
+-}
+
+
+-- Values ----------------------------------------------------------------------
+
+
+data Value
+  | ValInteger val :: Integer
+  | ValBool val :: Bool
+  | ValFloat val :: Float
+  | ValDouble val :: Double
+  | ValFP80 val :: FP80Value
+  | ValIdent ident :: Ident
+  | ValSymbol sym :: Symbol
+  | ValNull
+  | ValArray typ :: Type vals :: Values
+  | ValVector typ :: Type vals :: Values
+  | ValStruct fields :: TypedValues
+  | ValPackedStruct fields :: TypedValues
+  | ValString str :: {[Word8]}
+  | ValConstExpr constExpr :: ConstExpr
+  | ValUndef
+  | ValLabel lab :: BlockLabel
+  | ValZeroInit
+  | ValAsm a :: Bool b ::  Bool c :: String d ::  String
+  | ValMd md :: ValMd
+
+data ValMd
+  | ValMdString str :: String
+  | ValMdValue val :: TypedValue
+  | ValMdRef ref :: Int
+  | ValMdNode children :: MaybeValMds
+  | ValMdLoc dbgLoc :: DebugLoc
+  | ValMdDebugInfo info :: DebugInfo
+
+
+data DebugLoc
+  | DebugLoc
+    dlLine  :: Word32
+    dlCol   :: Word32
+    dlScope :: ValMd
+    dlIA    :: MaybeValMd
+    dlImplicit :: Bool
+
+-- Statements ------------------------------------------------------------------
+
+data Stmt
+  | Result
+      ident :: Ident
+      instr :: Instr
+      mds :: StmtMds
+  | Effect
+      instr :: Instr
+      mds :: StmtMds
+
+-- Constant Expressions --------------------------------------------------------
+
+
+data ConstExpr
+  | ConstGEP 
+      inbounds :: Bool
+      mix :: {Maybe Word64}
+      mp :: MaybeType
+      ixs :: TypedValues
+  -- ^ Element type introduced in LLVM 3.7
+  | ConstConv
+      op :: ConvOp
+      val :: TypedValue
+      ty :: Type
+  | ConstSelect 
+      cond :: TypedValue
+      then :: TypedValue
+      else :: TypedValue
+  | ConstBlockAddr
+      sym :: Symbol
+      lab :: BlockLabel
+  | ConstFCmp
+      op :: FCmpOp
+      lft :: TypedValue
+      rgt :: TypedValue
+  | ConstICmp
+      op :: ICmpOp
+      lft :: TypedValue
+      rgt :: TypedValue
+  | ConstArith
+      op :: ArithOp
+      lft :: TypedValue
+      rgt :: Value
+  | ConstBit
+      op :: BitOp
+      lft :: TypedValue
+      rgt :: Value
+
+-- DWARF Debug Info ------------------------------------------------------------
+
+data DebugInfo
+  | DebugInfoBasicType basicType :: DIBasicType
+  | DebugInfoCompileUnit compileUnit :: DICompileUnit
+  | DebugInfoCompositeType compositeType :: DICompositeType
+  | DebugInfoDerivedType derivedType :: DIDerivedType
+  | DebugInfoEnumerator name :: String value :: Int64
+  | DebugInfoExpression expression :: DIExpression
+  | DebugInfoFile file :: DIFile
+  | DebugInfoGlobalVariable globVar :: DIGlobalVariable
+  | DebugInfoGlobalVariableExpression globVarExpr :: DIGlobalVariableExpression
+  | DebugInfoLexicalBlock lexBlock :: DILexicalBlock
+  | DebugInfoLexicalBlockFile lexBlockFile :: DILexicalBlockFile
+  | DebugInfoLocalVariable locVar :: DILocalVariable
+  | DebugInfoSubprogram subprogram :: DISubprogram
+  | DebugInfoSubrange subrange :: DISubrange
+  | DebugInfoSubroutineType subroutineType :: DISubroutineType
+  | DebugInfoNameSpace namespace :: DINameSpace
+  | DebugInfoTemplateTypeParameter templateTypeParam :: DITemplateTypeParameter
+  | DebugInfoTemplateValueParameter templateValParam :: DITemplateValueParameter
+  | DebugInfoImportedEntity importedEntity :: DIImportedEntity
+  | DebugInfoLabel label :: DILabel
+
+
+data DILabel
+  | DILabel
+      dilScope :: MaybeValMd
+      dilName  :: String
+      dilFile  :: MaybeValMd
+      dilLine  :: Word32
+
+data DIImportedEntity
+  | DIImportedEntity
+      diieTag    :: DwarfTag
+      diieScope  :: MaybeValMd
+      diieEntity :: MaybeValMd
+      diieFile   :: MaybeValMd
+      diieLine   :: Word32
+      diieName   :: {Maybe String}
+
+data DITemplateTypeParameter
+  | DITemplateTypeParameter
+      dittpName :: {Maybe String}
+      dittpType :: MaybeValMd
+
+data DITemplateValueParameter
+  | DITemplateValueParameter
+      ditvpTag   :: DwarfTag
+      ditvpName  :: {Maybe String}
+      ditvpType  :: MaybeValMd
+      ditvpValue :: ValMd
+
+data DINameSpace
+  | DINameSpace
+      dinsName  :: {Maybe String}
+      dinsScope :: ValMd
+      dinsFile  :: ValMd
+      dinsLine  :: Word32
+
+data DIBasicType
+  | DIBasicType
+      dibtTag      :: DwarfTag
+      dibtName     :: String
+      dibtSize     :: Word64
+      dibtAlign    :: Word64
+      dibtEncoding :: DwarfAttrEncoding
+      dibtFlags    :: {Maybe DIFlags}
+
+data DICompileUnit
+  | DICompileUnit
+      dicuLanguage           :: DwarfLang
+      dicuFile               :: MaybeValMd
+      dicuProducer           :: {Maybe String}
+      dicuIsOptimized        :: Bool
+      dicuFlags              :: {Maybe String}
+      dicuRuntimeVersion     :: Word16
+      dicuSplitDebugFilename :: {Maybe FilePath}
+      dicuEmissionKind       :: DIEmissionKind
+      dicuEnums              :: MaybeValMd
+      dicuRetainedTypes      :: MaybeValMd
+      dicuSubprograms        :: MaybeValMd
+      dicuGlobals            :: MaybeValMd
+      dicuImports            :: MaybeValMd
+      dicuMacros             :: MaybeValMd
+      dicuDWOId              :: Word64
+      dicuSplitDebugInlining :: Bool
+
+data DICompositeType
+  | DICompositeType
+      dictTag            :: DwarfTag
+      dictName           :: {Maybe String}
+      dictFile           :: MaybeValMd
+      dictLine           :: Word32
+      dictScope          :: MaybeValMd
+      dictBaseType       :: MaybeValMd
+      dictSize           :: Word64
+      dictAlign          :: Word64
+      dictOffset         :: Word64
+      dictFlags          :: DIFlags
+      dictElements       :: MaybeValMd
+      dictRuntimeLang    :: DwarfLang
+      dictVTableHolder   :: MaybeValMd
+      dictTemplateParams :: MaybeValMd
+      dictIdentifier     :: {Maybe String}
+      dictDiscriminator  :: MaybeValMd
+
+data DIDerivedType
+  | DIDerivedType
+      didtTag :: DwarfTag
+      didtName :: {Maybe String}
+      didtFile :: MaybeValMd
+      didtLine :: Word32
+      didtScope :: MaybeValMd
+      didtBaseType :: MaybeValMd
+      didtSize :: Word64
+      didtAlign :: Word64
+      didtOffset :: Word64
+      didtFlags :: DIFlags
+      didtExtraData :: MaybeValMd
+
+data DIExpression
+  | DIExpression dieElements :: {[Word64]}
+
+data DIFile
+  | DIFile
+      difFilename  :: FilePath
+      difDirectory :: FilePath
+
+data DIGlobalVariable
+  | DIGlobalVariable
+      digvScope                :: MaybeValMd
+      digvName                 :: {Maybe String}
+      digvLinkageName          :: {Maybe String}
+      digvFile                 :: MaybeValMd
+      digvLine                 :: Word32
+      digvType                 :: MaybeValMd
+      digvIsLocal              :: Bool
+      digvIsDefinition         :: Bool
+      digvVariable             :: MaybeValMd
+      digvDeclaration          :: MaybeValMd
+      digvAlignment            :: {Maybe Word32}
+
+data DIGlobalVariableExpression
+  | DIGlobalVariableExpression
+      digveVariable   :: MaybeValMd
+      digveExpression :: MaybeValMd
+
+data DILexicalBlock
+  | DILexicalBlock
+      dilbScope  :: MaybeValMd
+      dilbFile   :: MaybeValMd
+      dilbLine   :: Word32
+      dilbColumn :: Word16
+
+data DILexicalBlockFile
+  | DILexicalBlockFile
+      dilbfScope         :: ValMd
+      dilbfFile          :: MaybeValMd
+      dilbfDiscriminator :: Word32
+
+data DILocalVariable
+  | DILocalVariable
+      dilvScope :: MaybeValMd
+      dilvName :: {Maybe String}
+      dilvFile :: MaybeValMd
+      dilvLine :: Word32
+      dilvType :: MaybeValMd
+      dilvArg :: Word16
+      dilvFlags :: DIFlags
+
+
+data DISubprogram
+  | DISubprogram
+      dispScope          :: MaybeValMd
+      dispName           :: {Maybe String}
+      dispLinkageName    :: {Maybe String}
+      dispFile           :: MaybeValMd
+      dispLine           :: Word32
+      dispType           :: MaybeValMd
+      dispIsLocal        :: Bool
+      dispIsDefinition   :: Bool
+      dispScopeLine      :: Word32
+      dispContainingType :: MaybeValMd
+      dispVirtuality     :: DwarfVirtuality
+      dispVirtualIndex   :: Word32
+      dispThisAdjustment :: Int64
+      dispFlags          :: DIFlags
+      dispIsOptimized    :: Bool
+      dispUnit           :: MaybeValMd
+      dispTemplateParams :: MaybeValMd
+      dispDeclaration    :: MaybeValMd
+      dispVariables      :: MaybeValMd
+      dispThrownTypes    :: MaybeValMd
+
+data DISubrange
+  | DISubrange
+      disrCount      :: Int64
+      disrLowerBound :: Int64
+
+data DISubroutineType
+  | DISubroutineType
+      distFlags     :: DIFlags
+      distTypeArray :: MaybeValMd
