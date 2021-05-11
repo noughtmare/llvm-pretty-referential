@@ -19,7 +19,7 @@ module {Text.LLVM.AGData}
 , MaybeValMd
 , TypeDecls
 -- , NamedMds
--- , UnnamedMds
+, UnnamedMds
 , Globals
 , Declares
 , Defines
@@ -53,7 +53,7 @@ type MaybeType = maybe Type
 type MaybeValMd = maybe ValMd
 type TypeDecls = [TypeDecl]
 -- type NamedMds = [NamedMd]
--- type UnnamedMds = [UnnamedMd]
+type UnnamedMds = [UnnamedMd]
 type Declares = [Declare]
 type Defines = [Define]
 type Globals = [Global]

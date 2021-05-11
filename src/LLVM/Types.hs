@@ -1,88 +1,94 @@
 {-# LANGUAGE DeriveDataTypeable, DeriveGeneric #-}
+{-# LANGUAGE ViewPatterns, LambdaCase, StrictData #-}
 {-# OPTIONS_GHC -O0 #-}
 module LLVM.Types
   ( module Text.LLVM.AST
   , UniqueId
   -- , Typed (..)
-  , SymValue (..)
-  , IdentValue (..)
-  , Value (..)
-  , Value' (..)
-  , Type (..)
-  , BasicBlock (..)
-  , StmtType (..)
-  , Stmt (..)
-  , Clause (..)
-  , ConstExpr (..)
-  , Instr (..)
-  , TypeDecl (..)
-  , Global (..)
-  , Define (..)
-  , Declare (..)
-  , GlobalAlias (..)
-  , Module (..)
-  , Argument (..)
-  , ValMd (..)
-  , DebugLoc (..)
-  , DebugInfo (..)
-  , DIFile (..)
-  , DILabel (..)
+  , SymValue(..)
+  , IdentValue(..)
+  , Value(..)
+  , Value'(..)
+  , Type(..)
+  , BasicBlock(..)
+  , StmtType(..)
+  , Stmt(..)
+  , Clause(..)
+  , ConstExpr(..)
+  , Instr(..)
+  , TypeDecl(..)
+  , Global(..)
+  , Define(..)
+  , Declare(..)
+  , GlobalAlias(..)
+  , Module(..)
+  , UnnamedMd(..)
+  , Argument(..)
+  , ValMd(..)
+  , DebugLoc(..)
+  , DebugInfo(..)
+  , DIFile(..)
+  , DILabel(..)
   , DIFlags
-  , DwarfTag
+  , DwarfTag(..)
   , DwarfLang
   , DwarfVirtuality
-  , DwarfAttrEncoding
-  , DISubrange (..)
-  , DIBasicType (..)
-  , DIExpression (..)
-  , DINameSpace (..)
-  , DISubprogram (..)
-  , DICompileUnit (..)
-  , DIDerivedType (..)
-  , DILexicalBlock (..)
+  , DwarfAttrEncoding(..)
+  , DISubrange(..)
+  , DIBasicType(..)
+  , DIExpression(..)
+  , DINameSpace(..)
+  , DISubprogram(..)
+  , DICompileUnit(..)
+  , DIDerivedType(..)
+  , DILexicalBlock(..)
   , DIEmissionKind
-  , DICompositeType (..)
-  , DILocalVariable (..)
-  , DIGlobalVariable (..)
-  , DISubroutineType (..)
-  , DIImportedEntity (..)
-  , DILexicalBlockFile (..)
-  , DIGlobalVariableExpression (..)
-  , DITemplateTypeParameter (..)
-  , DITemplateValueParameter (..)
-  , stripBitcasts
+  , DICompositeType(..)
+  , DILocalVariable(..)
+  , DIGlobalVariable(..)
+  , DISubroutineType(..)
+  , DIImportedEntity(..)
+  , DILexicalBlockFile(..)
+  , DIGlobalVariableExpression(..)
+  , DITemplateTypeParameter(..)
+  , DITemplateValueParameter(..)
+  , HasUniqueId(..)
+  , prettyType
   ) where
 
 import           Text.LLVM.AST                  ( Align
-                                                , ArithOp (..)
-                                                , AtomicOrdering (..)
-                                                , AtomicRWOp (..)
-                                                , BitOp (..)
-                                                , ConvOp (..)
+                                                , ArithOp(..)
+                                                , AtomicOrdering(..)
+                                                , AtomicRWOp(..)
+                                                , BitOp(..)
+                                                , BlockLabel(..)
+                                                , ConvOp(..)
                                                 , DataLayout
-                                                , LayoutSpec (..)
-                                                , FCmpOp (..)
-                                                , FP80Value (..)
-                                                , FunAttr (..)
-                                                , GC (..)
-                                                , GlobalAttrs (..)
-                                                , ICmpOp (..)
-                                                , Ident (..)
+                                                , FCmpOp(..)
+                                                , FP80Value(..)
+                                                , FloatType(..)
+                                                , FunAttr(..)
+                                                , GC(..)
+                                                , GlobalAttrs(..)
+                                                , ICmpOp(..)
+                                                , Ident(..)
                                                 , InlineAsm
                                                 , KindMd
-                                                , Linkage (..)
-                                                , NamedMd (..)
-                                                , PrimType (..)
-                                                , FloatType (..)
-                                                , SelectionKind (..)
-                                                , Symbol (..)
-                                                , UnnamedMd (..)
-                                                , BlockLabel (..)
+                                                , LayoutSpec(..)
+                                                , Linkage(..)
+                                                , NamedMd(..)
+                                                , PrimType(..)
+                                                , SelectionKind(..)
+                                                , Symbol(..)
+                                                , Visibility(..)
                                                 )
 
-import           Data.Map                       ( Map )
+import           Data.Map.Strict                ( Map )
 
+import           Control.DeepSeq                ( NFData(rnf) )
 import           Data.Data                      ( Data )
+import           Data.Function                  ( on )
+import           Data.Hashable                  ( Hashable(hashWithSalt) )
 import           Data.Int                       ( Int32
                                                 , Int64
                                                 )
@@ -92,13 +98,19 @@ import           Data.Word                      ( Word16
                                                 , Word8
                                                 )
 import           GHC.Generics                   ( Generic )
-import           Data.Hashable
-import           Control.DeepSeq
+
+import           Data.Char                      ( chr )
+import           Data.List                      ( intercalate )
+
+class HasUniqueId a where
+  uniqueId :: a -> UniqueId
 
 -- TODO this is probably no longer true
 --
 -- This isn't very honest, but Values are part of Modules and
 -- are fully evaluated before the module is constructed.
+instance NFData Stmt where
+  rnf _ = ()
 instance NFData Instr where
   rnf _ = ()
 instance NFData Value where
@@ -116,29 +128,59 @@ instance NFData Type where
 --   { typedType  :: Type
 --   , typedValue :: a
 --   }
---   deriving (Data, Eq, Ord, Generic, Show)
+--   deriving (Eq, Ord, Generic, Show)
 
 data SymValue
   = SymValAlias GlobalAlias
   | SymValGlobal Global
   | SymValDeclare Declare
   | SymValDefine Define
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic, Eq, Ord)
+
+instance Show SymValue where
+  show (SymValAlias   x) = show x
+  show (SymValGlobal  x) = show x
+  show (SymValDeclare x) = show x
+  show (SymValDefine  x) = show x
+
+instance HasUniqueId SymValue where
+  uniqueId (SymValAlias   ga ) = uniqueId ga
+  uniqueId (SymValGlobal  g  ) = uniqueId g
+  uniqueId (SymValDeclare dec) = uniqueId dec
+  uniqueId (SymValDefine  def) = uniqueId def
 
 data IdentValue
   = IdentValArgument Argument
   | IdentValStmt Stmt
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic, Eq, Ord)
+
+instance Show IdentValue where
+  show (IdentValArgument x) = show x
+  show (IdentValStmt     x) = show x
+
+instance HasUniqueId IdentValue where
+  uniqueId (IdentValArgument arg ) = uniqueId arg
+  uniqueId (IdentValStmt     stmt) = uniqueId stmt
 
 data Value = Value
-  { valType :: Type
+  { valType     :: Type
   , valUniqueId :: UniqueId
-  , valValue :: Value'
+  , valValue    :: Value'
+  , valName     :: Maybe String
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic, Show)
+
+instance HasUniqueId Value where
+  uniqueId = valUniqueId
+
+instance Eq Value where
+  (==) = (==) `on` uniqueId
+
+instance Ord Value where
+  compare x y = {- trace ("COMPARE " ++ show (valValue x) ++ " AND " ++ show (valValue y)) $ -}(compare `on` uniqueId) x y
 
 instance Hashable Value where
-  hashWithSalt s = hashWithSalt s . valUniqueId
+  hashWithSalt s = hashWithSalt s . uniqueId
 
 -- Resolve labels, identifiers and instructions
 data Value'
@@ -160,7 +202,28 @@ data Value'
   | ValZeroInit
   | ValAsm Bool Bool String String
   | ValMd ValMd
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Generic)
+
+instance Show Value' where
+  show (ValInteger x    ) = show x
+  show (ValBool    True ) = "true"
+  show (ValBool    False) = "false"
+  show (ValFloat   x    ) = show x
+  show (ValDouble  x    ) = show x
+  show (ValFP80    x    ) = show x
+  show (ValIdent   x    ) = show x
+  show (ValSymbol  x    ) = show x
+  show ValNull            = "NULL"
+  show (ValArray  _  xs)  = "[ " ++ intercalate ", " (map show xs) ++ " ]"
+  show (ValVector _  xs)  = "< " ++ unwords (map show xs) ++ " >"
+  show (ValStruct xs _ )  = "{ " ++ intercalate ", " (map show xs) ++ " }"
+  show (ValString    xs)  = "c" ++ show (map (chr . fromIntegral) xs)
+  show (ValConstExpr x )  = show x
+  show ValUndef           = "undef"
+  show (ValLabel x)       = show x
+  show ValZeroInit        = "zeroinitializer"
+  show (ValAsm _ _ x y)   = "asm " ++ x ++ ", " ++ y
+  show (ValMd _       )   = "<metadata>"
 
 -- Resolve type names
 data Type
@@ -168,10 +231,87 @@ data Type
   | Array Word64 Type
   | FunTy Type [Type] Bool
   | PtrTo Type
-  | Struct (Either UniqueId Ident) [Type] Bool
+  | Struct (Either UniqueId Ident) ~[Type] Bool
   | Vector Word64 Type
   | Opaque (Either UniqueId Ident)
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Generic)
+
+instance Show Type where
+  show = prettyType
+
+prettyType :: Type -> String
+prettyType = \case
+  (PrimType x           ) -> prettyPrimType x
+  (Array n x            ) -> concat ["[", show n, " x ", prettyType x, "]"]
+  (FunTy x xs hasVarArgs) -> concat
+    [ prettyType x
+    , " ("
+    , intercalate ", " (map prettyType xs)
+    , if hasVarArgs then ", ..." else ""
+    , ")"
+    ]
+  (PtrTo x             ) -> prettyType x <> "*"
+  (Struct (Left  i) _ _) -> "%struct.anon" <> show i
+  (Struct (Right (Ident i)) _ _) -> "%" <> i
+  (Vector n x          ) -> concat ["<", show n, " x ", prettyType x, ">"]
+  (Opaque _            ) -> "opaque"
+
+prettyPrimType :: PrimType -> String
+prettyPrimType = \case
+  Label -> "label"
+  Void -> "void"
+  (Integer i) -> "i" <> show i
+  (FloatType f) -> prettyFloatType f
+  X86mmx -> "x86_mmx"
+  Metadata -> "metadata"
+
+prettyFloatType :: FloatType -> String
+prettyFloatType = \case
+  Half -> "half"
+  Float -> "float"
+  Double -> "double"
+  Fp128 -> "fp128"
+  X86_fp80 -> "x86_fp80"
+  PPC_fp128 -> "ppc_fp128"
+
+instance Eq Type where
+  PrimType t1 == PrimType t2 = t1 == t2
+  Array i1 t1 == Array i2 t2 = i1 == i2 && t1 == t2
+  FunTy t1 ts1 b1 == FunTy t2 ts2 b2 = b1 == b2 && t1 == t2 && ts1 == ts2
+  PtrTo t1 == PtrTo t2 = t1 == t2
+  Struct x _ _ == Struct y _ _ = x == y
+  Vector i1 t1 == Vector i2 t2 = i1 == i2 && t1 == t2
+  Opaque x == Opaque y = x == y
+  _ == _ = False
+
+instance Ord Type where
+  compare (PrimType t1) (PrimType t2) = compare t1 t2
+  compare PrimType{} _ = LT
+  compare _ PrimType{} = GT
+
+  compare (Array i1 t1) (Array i2 t2) = compare i1 i2 <> compare t1 t2
+  compare Array{} _ = LT
+  compare _ Array{} = GT
+
+  compare (FunTy t1 ts1 b1) (FunTy t2 ts2 b2) = compare b1 b2 <> compare t1 t2 <> compare ts1 ts2
+  compare FunTy{} _ = LT
+  compare _ FunTy{} = GT
+
+  compare (PtrTo t1) (PtrTo t2) = compare t1 t2
+  compare PtrTo{} _ = LT
+  compare _ PtrTo{} = GT
+
+  compare (Struct x _ _) (Struct y _ _) = compare x y
+  compare Struct{} _ = LT
+  compare _ Struct{} = GT
+
+  compare (Vector i1 t1) (Vector i2 t2) = compare i1 i2 <> compare t1 t2
+  compare Vector{} _ = LT
+  compare _ Vector{} = GT
+
+  compare (Opaque x) (Opaque y) = compare x y
+  -- compare Opaque{} _ = LT
+  -- compare _ Opaque{} = GT
 
 instance Hashable Ident where
   hashWithSalt s (Ident i) = hashWithSalt s i
@@ -180,49 +320,85 @@ instance Hashable FloatType where
   hashWithSalt s = hashWithSalt s . fromEnum
 
 instance Hashable PrimType where
-  hashWithSalt s Label = s `hashWithSalt` (1 :: Int) 
-  hashWithSalt s Void = s `hashWithSalt` (2 :: Int)
-  hashWithSalt s (Integer i) = s `hashWithSalt` i `hashWithSalt` (3 :: Int)
+  hashWithSalt s Label         = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Void          = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s (Integer   i) = s `hashWithSalt` i `hashWithSalt` (3 :: Int)
   hashWithSalt s (FloatType f) = s `hashWithSalt` f `hashWithSalt` (4 :: Int)
-  hashWithSalt s X86mmx = s `hashWithSalt` (5 :: Int)
-  hashWithSalt s Metadata = s `hashWithSalt` (6 :: Int)
+  hashWithSalt s X86mmx        = s `hashWithSalt` (5 :: Int)
+  hashWithSalt s Metadata      = s `hashWithSalt` (6 :: Int)
 
 instance Hashable Type where
   hashWithSalt s (PrimType p) = s `hashWithSalt` p `hashWithSalt` (1 :: Int)
-  hashWithSalt s (Array i t) = s `hashWithSalt` i `hashWithSalt` t `hashWithSalt` (2 :: Int)
-  hashWithSalt s (FunTy t ts b) = s `hashWithSalt` t `hashWithSalt` ts `hashWithSalt` b `hashWithSalt` (3 :: Int)
+  hashWithSalt s (Array i t) =
+    s `hashWithSalt` i `hashWithSalt` t `hashWithSalt` (2 :: Int)
+  hashWithSalt s (FunTy t ts b) =
+    s
+      `hashWithSalt` t
+      `hashWithSalt` ts
+      `hashWithSalt` b
+      `hashWithSalt` (3 :: Int)
   hashWithSalt s (PtrTo t) = s `hashWithSalt` t `hashWithSalt` (4 :: Int)
-  hashWithSalt s (Struct (Right n) _ _) = s `hashWithSalt` n `hashWithSalt` (5 :: Int)
-  hashWithSalt s (Struct (Left i) _ p) = s `hashWithSalt` i `hashWithSalt` p `hashWithSalt` (5 :: Int)
-  hashWithSalt s (Vector n t) = s `hashWithSalt` n `hashWithSalt` t `hashWithSalt` (6 :: Int)
+  hashWithSalt s (Struct (Right n) _ _) =
+    s `hashWithSalt` n `hashWithSalt` (5 :: Int)
+  hashWithSalt s (Struct (Left i) _ p) =
+    s `hashWithSalt` i `hashWithSalt` p `hashWithSalt` (5 :: Int)
+  hashWithSalt s (Vector n t) =
+    s `hashWithSalt` n `hashWithSalt` t `hashWithSalt` (6 :: Int)
   hashWithSalt s (Opaque n) = s `hashWithSalt` n `hashWithSalt` (7 :: Int)
 
 data BasicBlock = BasicBlock
-  { bbName :: String
-  , bbLabel :: Maybe BlockLabel
-  , bbStmts :: [Stmt]
+  { bbName     :: String
+  , bbLabel    :: Maybe BlockLabel
+  , bbStmts    :: [Stmt]
   , bbUniqueId :: UniqueId
+  , bbDefine   :: ~Define
   }
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Generic)
 
+instance Show BasicBlock where
+  show BasicBlock { bbName = x } = x
+
+instance HasUniqueId BasicBlock where
+  uniqueId = bbUniqueId
+
+instance Eq BasicBlock where
+  (==) = (==) `on` uniqueId
+instance Ord BasicBlock where
+  compare = compare `on` uniqueId
 instance Hashable BasicBlock where
-  hashWithSalt s = hashWithSalt s . bbUniqueId
+  hashWithSalt s = hashWithSalt s . uniqueId
 
-data StmtType = Result Ident | Effect deriving (Eq, Ord, Data, Generic, Show)
+-- instance Show BasicBlock where
+--   show = ("bb" ++ ) . show . bbUniqueId
+
+data StmtType = Result Ident | Effect deriving (Eq, Ord, Generic, Show)
 
 data Stmt = Stmt
   { stmtType       :: StmtType
   , stmtInstr      :: Instr
   , stmtMd         :: [(String, ValMd)]
   , stmtUniqueId   :: UniqueId
-  , stmtBasicBlock :: BasicBlock
+  , stmtBasicBlock :: ~BasicBlock
   }
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Generic)
+
+instance HasUniqueId Stmt where
+  uniqueId = stmtUniqueId
+
+instance Eq       Stmt where
+  (==) = (==) `on` uniqueId
+instance Ord      Stmt where
+  compare = compare `on` uniqueId
+instance Hashable Stmt where
+  hashWithSalt s = hashWithSalt s . uniqueId
+
+instance Show Stmt where
+  show = ("stmt" ++) . show . stmtUniqueId
 
 data Clause
   = Catch Value
   | Filter Value
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Eq, Ord, Generic, Show)
 
 data ConstExpr
   = ConstGEP Bool (Maybe Word64) (Maybe Type) [Value]
@@ -234,25 +410,30 @@ data ConstExpr
   | ConstICmp ICmpOp Value Value
   | ConstArith ArithOp Value Value
   | ConstBit BitOp Value Value
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Eq, Generic, Ord, Show)
 
 data ValMd
   = ValMdString String
   | ValMdValue Value
-  | ValMdRef Int
   | ValMdNode [Maybe ValMd]
   | ValMdLoc DebugLoc
   | ValMdDebugInfo DebugInfo
-  deriving (Eq, Ord, Data, Generic, Show)
+  deriving (Generic)
 
 data DebugLoc = DebugLoc
   { dlLine     :: Word32
   , dlCol      :: Word32
-  , dlScope    :: ValMd
+  , dlScope    :: ~ValMd
   , dlIA       :: Maybe ValMd
   , dlImplicit :: Bool
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
+
+-- instance Eq DebugLoc where
+--   DebugLoc x1 x2 _ x4 x5 == DebugLoc y1 y2 _ y4 y5 = x1 == y1 && x2 == y2 && x5 == y5 && x4 == y4
+-- 
+-- instance Ord DebugLoc where
+--   compare (DebugLoc x1 x2 _ x4 x5
 
 data DebugInfo
   = DebugInfoBasicType DIBasicType
@@ -275,31 +456,31 @@ data DebugInfo
   | DebugInfoTemplateValueParameter DITemplateValueParameter
   | DebugInfoImportedEntity DIImportedEntity
   | DebugInfoLabel DILabel
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DILabel = DILabel
-  { dilScope :: Maybe ValMd
+  { dilScope :: ~(Maybe ValMd)
   , dilName  :: String
   , dilFile  :: Maybe ValMd
   , dilLine  :: Word32
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DIImportedEntity = DIImportedEntity
   { diieTag    :: DwarfTag
-  , diieScope  :: Maybe ValMd
+  , diieScope  :: ~(Maybe ValMd)
   , diieEntity :: Maybe ValMd
   , diieFile   :: Maybe ValMd
   , diieLine   :: Word32
   , diieName   :: Maybe String
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DITemplateTypeParameter = DITemplateTypeParameter
   { dittpName :: Maybe String
   , dittpType :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DITemplateValueParameter = DITemplateValueParameter
   { ditvpTag   :: DwarfTag
@@ -307,21 +488,20 @@ data DITemplateValueParameter = DITemplateValueParameter
   , ditvpType  :: Maybe ValMd
   , ditvpValue :: ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DINameSpace = DINameSpace
   { dinsName  :: Maybe String
-  , dinsScope :: ValMd
+  , dinsScope :: ~ValMd
   , dinsFile  :: ValMd
   , dinsLine  :: Word32
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 -- TODO: Turn these into sum types
 -- See https://github.com/llvm-mirror/llvm/blob/release_38/include/llvm/Support/Dwarf.def
-type DwarfAttrEncoding = Word16
 type DwarfLang = Word16
-type DwarfTag = Word16
+-- type DwarfTag = Word16
 type DwarfVirtuality = Word8
 -- See https://github.com/llvm-mirror/llvm/blob/release_38/include/llvm/IR/DebugInfoMetadata.h#L175
 type DIFlags = Word32
@@ -329,6 +509,88 @@ type DIFlags = Word32
 -- differently across versions. Maybe turn this into a sum type once
 -- it stabilizes.
 type DIEmissionKind = Word8
+
+data DwarfAttrEncoding
+  = DW_ATE_address
+  | DW_ATE_boolean
+  | DW_ATE_complex_float
+  | DW_ATE_float
+  | DW_ATE_signed
+  | DW_ATE_signed_char
+  | DW_ATE_unsigned
+  | DW_ATE_unsigned_char
+  | DW_ATE_imaginary_float
+  | DW_ATE_packed_decimal
+  | DW_ATE_numeric_string
+  | DW_ATE_edited
+  | DW_ATE_signed_fixed
+  | DW_ATE_unsigned_fixed
+  | DW_ATE_decimal_float
+  | DW_ATE_UTF
+  deriving (Eq, Ord, Enum, Read, Show, Generic)
+
+data DwarfTag
+ = DW_TAG_array_type
+ | DW_TAG_class_type
+ | DW_TAG_entry_point
+ | DW_TAG_enumeration_type
+ | DW_TAG_formal_parameter
+ | DW_TAG_imported_declaration
+ | DW_TAG_label
+ | DW_TAG_lexical_block
+ | DW_TAG_member
+ | DW_TAG_pointer_type
+ | DW_TAG_reference_type
+ | DW_TAG_compile_unit
+ | DW_TAG_string_type
+ | DW_TAG_structure_type
+ | DW_TAG_subroutine_type
+ | DW_TAG_typedef
+ | DW_TAG_union_type
+ | DW_TAG_unspecified_parameters
+ | DW_TAG_variant
+ | DW_TAG_common_block
+ | DW_TAG_common_inclusion
+ | DW_TAG_inheritance
+ | DW_TAG_inlined_subroutine
+ | DW_TAG_module
+ | DW_TAG_ptr_to_member_type
+ | DW_TAG_set_type
+ | DW_TAG_subrange_type
+ | DW_TAG_with_stmt
+ | DW_TAG_access_declaration
+ | DW_TAG_base_type
+ | DW_TAG_catch_block
+ | DW_TAG_const_type
+ | DW_TAG_constant
+ | DW_TAG_enumerator
+ | DW_TAG_file_type
+ | DW_TAG_friend
+ | DW_TAG_namelist
+ | DW_TAG_namelist_item
+ | DW_TAG_packed_type
+ | DW_TAG_subprogram
+ | DW_TAG_template_type_parameter
+ | DW_TAG_template_value_parameter
+ | DW_TAG_thrown_type
+ | DW_TAG_try_block
+ | DW_TAG_variant_part
+ | DW_TAG_variable
+ | DW_TAG_volatile_type
+ | DW_TAG_dwarf_procedure
+ | DW_TAG_restrict_type
+ | DW_TAG_interface_type
+ | DW_TAG_namespace
+ | DW_TAG_imported_module
+ | DW_TAG_unspecified_type
+ | DW_TAG_partial_unit
+ | DW_TAG_imported_unit
+ | DW_TAG_condition
+ | DW_TAG_shared_type
+ | DW_TAG_type_unit
+ | DW_TAG_rvalue_reference_type
+ | DW_TAG_template_alias
+ deriving (Eq, Ord, Enum, Show, Read, Generic)
 
 data DIBasicType = DIBasicType
   { dibtTag      :: DwarfTag
@@ -338,7 +600,7 @@ data DIBasicType = DIBasicType
   , dibtEncoding :: DwarfAttrEncoding
   , dibtFlags    :: Maybe DIFlags
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Eq, Generic, Ord, Show)
 
 data DICompileUnit = DICompileUnit
   { dicuLanguage           :: DwarfLang
@@ -363,14 +625,14 @@ data DICompileUnit = DICompileUnit
   , dicuSysRoot            :: Maybe String
   , dicuSDK                :: Maybe String
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DICompositeType = DICompositeType
   { dictTag            :: DwarfTag
   , dictName           :: Maybe String
   , dictFile           :: Maybe ValMd
   , dictLine           :: Word32
-  , dictScope          :: Maybe ValMd
+  , dictScope          :: ~(Maybe ValMd)
   , dictBaseType       :: Maybe ValMd
   , dictSize           :: Word64
   , dictAlign          :: Word64
@@ -384,14 +646,14 @@ data DICompositeType = DICompositeType
   , dictDiscriminator  :: Maybe ValMd
   , dictDataLocation   :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DIDerivedType = DIDerivedType
   { didtTag       :: DwarfTag
   , didtName      :: Maybe String
   , didtFile      :: Maybe ValMd
   , didtLine      :: Word32
-  , didtScope     :: Maybe ValMd
+  , didtScope     :: ~(Maybe ValMd)
   , didtBaseType  :: Maybe ValMd
   , didtSize      :: Word64
   , didtAlign     :: Word64
@@ -399,21 +661,21 @@ data DIDerivedType = DIDerivedType
   , didtFlags     :: DIFlags
   , didtExtraData :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 newtype DIExpression = DIExpression
   { dieElements :: [Word64]
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Eq, Generic, Ord, Show)
 
 data DIFile = DIFile
   { difFilename  :: FilePath
   , difDirectory :: FilePath
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Eq, Generic, Ord, Show)
 
 data DIGlobalVariable = DIGlobalVariable
-  { digvScope        :: Maybe ValMd
+  { digvScope        :: ~(Maybe ValMd)
   , digvName         :: Maybe String
   , digvLinkageName  :: Maybe String
   , digvFile         :: Maybe ValMd
@@ -425,31 +687,31 @@ data DIGlobalVariable = DIGlobalVariable
   , digvDeclaration  :: Maybe ValMd
   , digvAlignment    :: Maybe Word32
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DIGlobalVariableExpression = DIGlobalVariableExpression
   { digveVariable   :: Maybe ValMd
   , digveExpression :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DILexicalBlock = DILexicalBlock
-  { dilbScope  :: Maybe ValMd
+  { dilbScope  :: ~(Maybe ValMd)
   , dilbFile   :: Maybe ValMd
   , dilbLine   :: Word32
   , dilbColumn :: Word16
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DILexicalBlockFile = DILexicalBlockFile
-  { dilbfScope         :: ValMd
+  { dilbfScope         :: ~ValMd
   , dilbfFile          :: Maybe ValMd
   , dilbfDiscriminator :: Word32
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DILocalVariable = DILocalVariable
-  { dilvScope :: Maybe ValMd
+  { dilvScope :: ~(Maybe ValMd)
   , dilvName  :: Maybe String
   , dilvFile  :: Maybe ValMd
   , dilvLine  :: Word32
@@ -457,10 +719,10 @@ data DILocalVariable = DILocalVariable
   , dilvArg   :: Word16
   , dilvFlags :: DIFlags
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DISubprogram = DISubprogram
-  { dispScope          :: Maybe ValMd
+  { dispScope          :: ~(Maybe ValMd)
   , dispName           :: Maybe String
   , dispLinkageName    :: Maybe String
   , dispFile           :: Maybe ValMd
@@ -481,24 +743,24 @@ data DISubprogram = DISubprogram
   , dispVariables      :: Maybe ValMd
   , dispThrownTypes    :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 data DISubrange = DISubrange
   { disrCount      :: Int64
   , disrLowerBound :: Int64
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Eq, Generic, Ord, Show)
 
 data DISubroutineType = DISubroutineType
   { distFlags     :: DIFlags
   , distTypeArray :: Maybe ValMd
   }
-  deriving (Data, Eq, Generic, Ord, Show)
+  deriving (Generic)
 
 type UniqueId = Int
 
 -- data Unique a = Unique { uniqueId :: UniqueId,  uniqueValue :: a }
---   deriving (Eq, Ord, Data, Generic, Show)
+--   deriving (Eq, Ord, Generic, Show)
 
 -- type Instr = Unique Instr'
 
@@ -602,7 +864,7 @@ data Instr
          * Middle of basic block.
          * Returns a boolean value. -}
 
-  | Phi Type [(Value,BasicBlock)]
+  | Phi Type [(Value, BasicBlock)]
     {- ^ * Join point for an SSA value: we get one value per predecessor
            basic block.
          * Middle of basic block.
@@ -683,7 +945,7 @@ data Instr
   | VaArg Value Type
   | IndirectBr Value [BasicBlock]
 
-  | Switch Value BasicBlock [(Integer,BasicBlock)]
+  | Switch Value BasicBlock [(Integer, BasicBlock)]
     {- ^ * Multi-way branch: the first value determines the direction
            of the branch, the label is a default direction, if the value
            does not appear in the jump table, the last argument is the
@@ -694,20 +956,38 @@ data Instr
 
   | Resume Value
 
-    deriving (Data, Eq, Generic, Ord, Show)
+    deriving (Eq, Generic, Ord, Show)
 
 --
 
 data GlobalAlias = GlobalAlias
-  { aliasName  :: Symbol
-  , aliasType  :: Type
-  , aliasValue :: Value
-  , aliasUniqueId :: UniqueId
+  { aliasLinkage    :: Maybe Linkage
+  , aliasVisibility :: Maybe Visibility
+  , aliasName       :: Symbol
+  , aliasType       :: Type
+  , aliasTarget     :: Value
+  , aliasUniqueId   :: UniqueId
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic)
+
+instance Show GlobalAlias where
+  show GlobalAlias { aliasName = Symbol x } = "@" ++ x
+
+instance HasUniqueId GlobalAlias where
+  uniqueId = aliasUniqueId
+
+instance Eq       GlobalAlias where
+  (==) = (==) `on` uniqueId
+instance Ord      GlobalAlias where
+  compare = compare `on` uniqueId
+instance Hashable GlobalAlias where
+  hashWithSalt s = hashWithSalt s . uniqueId
+
+-- instance Show GlobalAlias where
+--   show = ("ga" ++ ) . show . aliasUniqueId
 
 data Global = Global
-  { globalSym      :: Symbol
+  { globalName     :: Symbol
   , globalAttrs    :: GlobalAttrs
   , globalType     :: Type
   , globalValue    :: Maybe Value
@@ -715,42 +995,87 @@ data Global = Global
   , globalAlign    :: Maybe Align
   , globalMetadata :: GlobalMdAttachments
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic)
+
+instance Show Global where
+  show (Global name attrs ty val uniqueid align _meta) = unwords ["Global", show name, show attrs, show ty, show val, show uniqueid, show align, "<meta>"]
+
+instance HasUniqueId Global where
+  uniqueId = globalUniqueId
+
+instance Eq       Global where
+  (==) = (==) `on` uniqueId
+instance Ord      Global where
+  compare = compare `on` uniqueId
+instance Hashable Global where
+  hashWithSalt s = hashWithSalt s . uniqueId
+
+-- instance Show Global where
+--   show = ("g" ++ ) . show . globalUniqueId
 
 type GlobalMdAttachments = Map KindMd ValMd
 
 data Declare = Declare
-  { decRetType  :: Type
-  , decName     :: Symbol
-  , decArgs     :: [Type]
-  , decVarArgs  :: Bool
-  , decAttrs    :: [FunAttr]
-  , decUniqueId :: UniqueId
-  , decComdat   :: Maybe String
+  { decLinkage    :: Maybe Linkage
+  , decVisibility :: Maybe Visibility
+  , decRetType    :: Type
+  , decName       :: Symbol
+  , decArgs       :: [Type]
+  , decVarArgs    :: Bool
+  , decAttrs      :: [FunAttr]
+  , decUniqueId   :: UniqueId
+  , decComdat     :: Maybe String
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic)
 
+instance Show Declare where
+  show Declare { decName = Symbol x } = "@" ++ x
+
+instance HasUniqueId Declare where
+  uniqueId = decUniqueId
+
+instance Eq       Declare where
+  (==) = (==) `on` uniqueId
+instance Ord      Declare where
+  compare = compare `on` uniqueId
 instance Hashable Declare where
-  hashWithSalt s = hashWithSalt s . decUniqueId
+  hashWithSalt s = hashWithSalt s . uniqueId
+
+-- instance Show Declare where
+--   show = ("dec" ++ ) . show . decUniqueId
 
 data Define = Define
-  { defLinkage  :: Maybe Linkage
-  , defRetType  :: Type
-  , defName     :: Symbol
-  , defArgs     :: [Argument]
-  , defVarArgs  :: Bool
-  , defAttrs    :: [FunAttr]
-  , defSection  :: Maybe String
-  , defGC       :: Maybe GC
-  , defBody     :: [BasicBlock]
-  , defUniqueId :: UniqueId
-  , defMetadata :: FnMdAttachments
-  , defComdat   :: Maybe String
+  { defLinkage    :: Maybe Linkage
+  , defVisibility :: Maybe Visibility
+  , defRetType    :: Type
+  , defName       :: Symbol
+  , defArgs       :: [Argument]
+  , defVarArgs    :: Bool
+  , defAttrs      :: [FunAttr]
+  , defSection    :: Maybe String
+  , defGC         :: Maybe GC
+  , defBody       :: [BasicBlock]
+  , defUniqueId   :: UniqueId
+  , defMetadata   :: FnMdAttachments
+  , defComdat     :: Maybe String
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic)
 
+instance Show Define where
+  show Define { defName = Symbol x } = "@" ++ x
+
+instance HasUniqueId Define where
+  uniqueId = defUniqueId
+
+instance Eq       Define where
+  (==) = (==) `on` uniqueId
+instance Ord      Define where
+  compare = compare `on` uniqueId
 instance Hashable Define where
-  hashWithSalt s = hashWithSalt s . defUniqueId
+  hashWithSalt s = hashWithSalt s . uniqueId
+
+-- instance Show Define where
+--   show = ("def" ++) . show . uniqueId
 
 type FnMdAttachments = Map KindMd ValMd
 
@@ -767,29 +1092,46 @@ data Module = Module
   , modInlineAsm  :: InlineAsm
   , modAliases    :: [GlobalAlias]
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic, Eq, Ord)
 
-data TypeDecl
-  = TypeDecl
-    { typeName  :: Ident
-    , typeValue :: Type
-    } deriving (Data, Generic, Eq, Ord, Show)
+data UnnamedMd = UnnamedMd
+  { umIndex    :: Int
+  , umValues   :: ValMd
+  , umDistinct :: Bool
+  }
+  deriving (Generic)
+
+instance Eq UnnamedMd where
+  (==) = (==) `on` umIndex
+
+instance Ord UnnamedMd where
+  compare = compare `on` umIndex
+
+data TypeDecl = TypeDecl
+  { typeName  :: Ident
+  , typeValue :: Type
+  }
+  deriving (Generic, Eq, Ord, Show)
 
 -- FIXME: missing parameter attributes
 data Argument = Argument
-  { argDefine :: Define
-  , argName   :: Ident
-  , argType   :: Type
+  { argDefine   :: ~Define
+  , argName     :: String
+  , argType     :: Type
   , argUniqueId :: UniqueId
+  , argMd       :: Maybe ValMd
   }
-  deriving (Data, Generic, Eq, Ord, Show)
+  deriving (Generic)
 
+instance HasUniqueId Argument where
+  uniqueId = argUniqueId
+
+instance Eq       Argument where
+  (==) = (==) `on` uniqueId
+instance Ord      Argument where
+  compare = compare `on` uniqueId
 instance Hashable Argument where
-  hashWithSalt s = hashWithSalt s . argUniqueId
+  hashWithSalt s = hashWithSalt s . uniqueId
 
-{-# INLINABLE stripBitcasts #-}
--- | Strip all wrapper bitcasts from a Value
-stripBitcasts :: Value -> Value
-stripBitcasts (Value _ _ (ValIdent (IdentValStmt Stmt {stmtInstr = Conv BitCast cv _}))) = stripBitcasts cv
-stripBitcasts (Value _ _ (ValConstExpr (ConstConv BitCast cv _))) = stripBitcasts cv
-stripBitcasts v = v
+instance Show Argument where
+  show Argument { argName = x } = x

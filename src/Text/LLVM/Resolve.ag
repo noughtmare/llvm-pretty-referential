@@ -4,6 +4,7 @@ optpragmas {
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -O0 #-} -- saves a few seconds
 }
 
@@ -24,19 +25,50 @@ import Text.LLVM.AST
 import Text.LLVM.AGData
 
 import LLVM.TypeInference
+import LLVM.Utils
+import LLVM.Types (HasUniqueId (uniqueId))
+import Debug.Trace
+import System.IO.Unsafe
+import System.IO
+
+import Debug.Trace
 }
 
 include "AG.ag"
 
 {
+-- {-# NOINLINE trace #-}
+-- trace :: String -> a -> a
+-- trace str x = unsafePerformIO $ do
+--   putStrLn str
+--   hFlush stdout
+--   return x
+
 resolve :: Module -> R.Module
 resolve m = res_Syn_Module $ wrap_Module (sem_Module m) Inh_Module
   { counter_Inh_Module = 0 }
+
+-- mkValue :: R.Value' -> Maybe R.Value
+-- mkValue (R.ValIdent x)  = Just (toValue x)
+-- mkValue (R.ValSymbol x) = Just (toValue x)
+-- mkValue (R.ValLabel x)  = Just (toValue x)
+-- mkValue _ = Nothing
+-- 
+-- getTypeMay :: R.Value' -> Maybe R.Type
+-- getTypeMay (R.ValIdent x)  = Just (getType x)
+-- getTypeMay (R.ValSymbol x) = Just (getType x)
+-- getTypeMay (R.ValLabel x)  = Just (getType x)
+-- getTypeMay _ = Nothing
 }
 
 --------------------------------------------------------------------------------
 -- Boring mechanical resolution code
 --------------------------------------------------------------------------------
+
+attr GlobalAliases [ | | res use {:} {[]} :: {[R.GlobalAlias]} ]
+attr Globals       [ | | res use {:} {[]} :: {[R.Global]} ]
+attr Declares      [ | | res use {:} {[]} :: {[R.Declare]} ]
+attr Defines       [ | | res use {:} {[]} :: {[R.Define]} ]
 
 attr Ident Symbol BlockLabel
   syn copy :: self
@@ -46,102 +78,112 @@ sem Module [ | | res :: {R.Module} ] | Module
     = R.Module
         @modSourceName
         @modDataLayout
-        @modTypes.ress
+        @modTypes.res
         @modNamedMd
-        @modUnnamedMd
+        @modUnnamedMd.res
         @modComdat
-        @modGlobals.ress
-        @modDeclares.ress
-        @modDefines.ress
+        @modGlobals.res
+        @modDeclares.res
+        @modDefines.res
         @modInlineAsm
-        @modAliases.ress
-
-sem GlobalAliases [ | | ress use {++} {[]} :: {[R.GlobalAlias]} ]
-  | Cons +ress = (@hd.res :)
+        @modAliases.res
 
 sem GlobalAlias [ | | res :: {R.GlobalAlias} ] | GlobalAlias
-  loc.uniq1 :: uniqueref counter
-  loc.uniq2 :: uniqueref counter
+  loc.uniq :: uniqueref counter
   loc.res
     = R.GlobalAlias
+        @aliasLinkage
+        @aliasVisibility
         @aliasName.copy
         @aliasType.res
-        (R.Value @aliasType.res @loc.uniq1 @aliasValue.res)
-        @loc.uniq2
-
-sem Globals [ | | ress use {++} {[]} :: {[R.Global]} ]
-  | Cons +ress = (@hd.res :)
+        (mkValue "globalalias" (fromMaybe @aliasType.res @aliasValue.typ)
+                 @aliasValue.uniq
+                 @aliasValue.res
+                 @aliasValue.name)
+        @loc.uniq
 
 type GlobalMdAttachments = map {KindMd} ValMd
 
-sem GlobalMdAttachments [ | | ress use {<>} {mempty} :: {Map KindMd R.ValMd} ]
-  | Entry +ress = Map.insert @key @val.res
+attr GlobalMdAttachments [ | | res use {Map.insert @key} {mempty} :: {Map KindMd R.ValMd} ]
+  -- | Entry +res = Map.insert @key @val.res
 
 sem Global [ | | res :: {R.Global} ] | Global
-  loc.uniq1 :: uniqueref counter
-  loc.uniq2 :: uniqueref counter
+  loc.uniq :: uniqueref counter
   loc.res
     = R.Global
         @globalSym.copy
         @globalAttrs
         @globalType.res
-        (fmap (R.Value @globalType.res @loc.uniq1) @globalValue.res)
-        @loc.uniq2
+        ((\val -> mkValue "global" (fromMaybe @globalType.res @globalValue.typ)
+                    @globalValue.uniq
+                    val
+                    @globalValue.name) <$> @globalValue.res)
+        @loc.uniq
         @globalAlign
-        @globalMetadata.ress
-
-sem Declares [ | | ress use {++} {[]} :: {[R.Declare]} ]
-  | Cons +ress = (@hd.res :)
+        @globalMetadata.res
 
 sem Declare | * loc.uniq :: uniqueref counter
 sem Declare [ | | res :: {R.Declare} ] | Declare
   loc.res
     = R.Declare
+        @decLinkage
+        @decVisibility
         @decRetType.res
         @decName.copy
-        @decArgs.ress
+        @decArgs.res
         @decVarArgs
         @decAttrs
         @loc.uniq
         @decComdat
 
-sem Defines [ | | ress use {++} {[]} :: {[R.Define]} ] | Cons +ress = (@hd.res :)
-
 type FnMdAttachments = map {KindMd} ValMd
 
-sem FnMdAttachments [ | | ress use {<>} {mempty} :: {Map KindMd R.ValMd} ]
-  | Entry +ress = Map.insert @key @val.res
+attr FnMdAttachments [ | | res use {Map.insert @key} {mempty} :: {Map KindMd R.ValMd} ]
+  -- | Entry +res = Map.insert @key @val.res
 
 sem Define | * loc.uniq :: uniqueref counter
 sem Define [ | | res :: {R.Define} ] | Define
   loc.res
     = R.Define
         @defLinkage
+        @defVisibility
         @defRetType.res
         @defName.copy
-        @defArgs.ress
+        @defArgs.res
         @defVarArgs
         @defAttrs
         @defSection
         @defGC
-        @defBody.ress
+        @defBody.res
         @loc.uniq
-        @defMetadata.ress
+        @defMetadata.res
         @defComdat
+  defArgs.md = case Map.lookup "dbg" @defMetadata.res of
+                 Just (R.ValMdDebugInfo (R.DebugInfoSubprogram (R.DISubprogram { R.dispVariables = Just (R.ValMdNode xs) }))) -> xs
+                 _ -> []
 
-sem TypedIdents [ | | ress use {++} {[]} :: {[R.Argument]} ]
-  | Cons +ress = (@hd.res :)
+attr TypedIdents [ md :: {[Maybe R.ValMd]} | | ]
+attr TypedIdent [ md :: {Maybe R.ValMd} | | ]
+
+sem TypedIdents 
+  | Cons (hd.md, tl.md) = case @lhs.md of
+                            [] -> (Nothing, [])
+                            (x:xs) -> (x, xs)
+
+attr TypedIdents [ | | res use {:} {[]} :: {[R.Argument]} ]
 
 sem TypedIdent | * loc.uniq :: uniqueref counter
 sem TypedIdent [ | | res :: {R.Argument} ]
-  | Typed loc.res = R.Argument @lhs.parentDefine @ident.copy @typ.res @loc.uniq
+  | Typed loc.res = R.Argument @lhs.parentDefine @loc.name @typ.res @loc.uniq @lhs.md
+          loc.name = case @lhs.md of
+                       Just (R.ValMdDebugInfo (R.DebugInfoLocalVariable (R.DILocalVariable { R.dilvName = Just n }))) -> n
+                       x -> prettyIdent $ @ident.copy
 
 sem MaybeType [ | | res :: {Maybe R.Type} ]
   | Nothing loc.res = Nothing
   | Just loc.res = Just @just.res
 
-sem Types [ | | ress use {++} {[]} :: {[R.Type]} ]
-  | Cons +ress = (@hd.res :)
+attr Types [ | | res use {:} {[]} :: {[R.Type]} ]
 
 sem Type | * loc.uniq :: uniqueref counter
 sem Type [ | | res :: {R.Type} ]
@@ -152,177 +194,229 @@ sem Type [ | | res :: {R.Type} ]
           R.Opaque (Left _)             -> R.Opaque (Right @ident.copy)
           _ -> error "Unexpected alias: anonymous struct nor anonymous opaque type"
   | Array        loc.res = R.Array @size @elemType.res
-  | FunTy        loc.res = R.FunTy @resType.res @argTypes.ress @isVariadic
+  | FunTy        loc.res = R.FunTy @resType.res @argTypes.res @isVariadic
   | PtrTo        loc.res = R.PtrTo @toType.res
-  | Struct       loc.res = R.Struct (Left @loc.uniq) @fieldTypes.ress False
-  | PackedStruct loc.res = R.Struct (Left @loc.uniq) @fieldTypes.ress True
+  | Struct       loc.res = R.Struct (Left @loc.uniq) @fieldTypes.res False
+  | PackedStruct loc.res = R.Struct (Left @loc.uniq) @fieldTypes.res True
   | Vector       loc.res = R.Vector @size @elemType.res
   | Opaque       loc.res = R.Opaque (Left @loc.uniq)
 
-sem BasicBlocks [ | | ress use {++} {[]} :: {[R.BasicBlock]} ]
-  | Cons +ress = (@hd.res :)
+attr BasicBlocks [ | | res use {:} {[]} :: {[R.BasicBlock]} ]
 
 sem BasicBlock [ | | res :: {R.BasicBlock} ] | BasicBlock
-  loc.res = R.BasicBlock @bbName @bbLabel @bbStmts.ress @bbUniqueId
+  loc.res = R.BasicBlock @bbName @bbLabel @bbStmts.res @bbUniqueId @lhs.parentDefine
 
-sem Stmts [ | | ress use {++} {[]} :: {[R.Stmt]} ]
-  | Cons +ress = (@hd.res :)
+attr Stmts [ | | res use {:} {[]} :: {[R.Stmt]} ]
 
 sem Stmt [ | | res :: {R.Stmt} ]
-  | Result loc.res = R.Stmt (R.Result @ident.copy) @instr.res @mds.ress @stmtUniqueId @lhs.parentBasicBlock
-  | Effect loc.res = R.Stmt R.Effect               @instr.res @mds.ress @stmtUniqueId @lhs.parentBasicBlock
+  | Result loc.res = R.Stmt (R.Result @ident.copy) @instr.res @mds.res @stmtUniqueId @lhs.parentBasicBlock
+  | Effect loc.res = R.Stmt R.Effect               @instr.res @mds.res @stmtUniqueId @lhs.parentBasicBlock
 
-sem StmtMds [ | | ress use {++} {[]} :: {[(String,R.ValMd)]} ]
-  | Cons +ress = (@hd.res :)
+attr StmtMds [ | | res use {:} {[]} :: {[(String,R.ValMd)]} ]
 
 sem StmtMd [ | | res :: {(String, R.ValMd)} ]
   | Tuple loc.res = (@x1, @x2.res)
 
-sem Instr | * loc.uniq :: uniqueref counter
+{
+matchType :: R.Type -> R.Type -> Bool
+matchType (R.FunTy t1 ts1 _) (R.FunTy t2 ts2 _) = matchType t1 t2 && and (zipWith matchType ts1 ts2)
+matchType (R.Array n1 t1) (R.Array n2 t2) = n1 == n2 && matchType t1 t2
+matchType (R.PtrTo t1) (R.PtrTo t2) = matchType t1 t2
+matchType (R.Struct x _ _) (R.Struct y _ _) = True || x == y -- disable this for now, we could implement a full unification algorithm, but this is just for debugging purposes.
+matchType (R.Vector n1 t1) (R.Vector n2 t2) = n1 == n2 && matchType t1 t2
+matchType t1 t2 = t1 == t2
+
+mkValue :: String -> R.Type -> R.UniqueId -> R.Value' -> Maybe String -> R.Value
+mkValue str t _ v@(R.ValIdent (R.IdentValStmt x)) _ | not (matchType t (getType x)) = error ("Stmt " ++ str ++ ": " ++ show (t,getType x,R.stmtInstr x))
+mkValue str t _ v@(R.ValIdent x) _ | not (matchType t (getType x)) = error ("Ident " ++ str ++ ": " ++ show (t,getType x))
+mkValue str t _ v@(R.ValSymbol x) _ | not (matchType t (getType x)) = error ("Symbol " ++ str ++ ": " ++ show (t,getType x))
+mkValue _ t i v s = R.Value t i v s
+}
+
 sem Instr [ | | res :: {R.Instr} ]
   | Ret           loc.res = R.Ret @retVal.res
+                  loc.origin = "ret"
   | RetVoid       loc.res = R.RetVoid
-  | Arith         loc.res = R.Arith @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
-  | Bit           loc.res = R.Bit @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+                  loc.origin = "retvoid"
+  | Arith         loc.res = R.Arith @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
+                  loc.origin = "arith"
+  | Bit           loc.res = R.Bit @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
+                  loc.origin = "bit"
   | Conv          loc.res = R.Conv @op @val.res @tgt.res
-  | Call          loc.res = let x = @resType.funTy (map R.valType @args.ress) in R.Call @tailCall x (R.Value x @loc.uniq @fun.res) @args.ress
+                  loc.origin = "conv"
+  | Call          loc.res = let t = @resType.funTy (map R.valType @args.res) in R.Call @tailCall t (mkValue @loc.origin t @fun.uniq @fun.res @fun.name) @args.res
+                  loc.origin = "call"
   | Alloca        loc.res = R.Alloca @elemType.res @amount.res @align
+                  loc.origin = "alloca"
   | Load          loc.res = R.Load @addr.res @atomicOrdering @align
+                  loc.origin = "load"
   | Store         loc.res = R.Store @val.res @ptr.res @atomicOrdering @align
+                  loc.origin = "store"
   | Fence         loc.res = R.Fence @syncScope @atomicOrdering
+                  loc.origin = "fence"
   | CmpXchg       loc.res = R.CmpXchg @weak @volatile @ptr.res @value.res @equalValue.res @syncScope @successOrdering @failOrdering
+                  loc.origin = "cmpxchg"
   | AtomicRW      loc.res = R.AtomicRW @volatile @op @ptr.res @value.res @syncScope @syncOrdering
-  | ICmp          loc.res = R.ICmp @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
-  | FCmp          loc.res = R.FCmp @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
-  | Phi           loc.res = R.Phi @typ.res @preds.ress
-  | GEP           loc.res = R.GEP @inbounds @base.res @path.ress
-  | Select        loc.res = R.Select @cond.res @then.res (R.Value @then.typ @loc.uniq @else.res)
+                  loc.origin = "atomicrw"
+  | ICmp          loc.res = R.ICmp @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
+                  loc.origin = "icmp"
+  | FCmp          loc.res = R.FCmp @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
+                  loc.origin = "fcmp"
+  | Phi           loc.res = R.Phi @typ.res @preds.res
+                  loc.origin = "phi"
+  | GEP           loc.res = R.GEP @inbounds @base.res @path.res
+                  loc.origin = "gep"
+  | Select        loc.res = R.Select @cond.res @then.res (mkValue @loc.origin @then.typ @else.uniq @else.res @else.name)
+                  loc.origin = "select"
   | ExtractValue  loc.res = R.ExtractValue @aggr.res @path
+                  loc.origin = "extractvalue"
   | InsertValue   loc.res = R.InsertValue @val.res @aggr.res @path
-  | ExtractElt    loc.res = R.ExtractElt @vec.res (R.Value (R.PrimType (Integer (error "TODO vector index can by any integer type"))) @loc.uniq @index.res)
-  | InsertElt     loc.res = R.InsertElt @vec.res @val.res (R.Value (R.PrimType (Integer (error "TODO vector index can by any integer type"))) @loc.uniq @index.res)
-  | ShuffleVector loc.res = R.ShuffleVector @vec1.res (R.Value @vec1.typ @loc.uniq @vec2.res) @mask.res
+                  loc.origin = "insertvalue"
+  | ExtractElt    loc.res = R.ExtractElt @vec.res (mkValue @loc.origin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name)
+                  loc.origin = "extractelt"
+  | InsertElt     loc.res = R.InsertElt @vec.res @val.res (mkValue @loc.origin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name)
+                  loc.origin = "insertelt"
+  | ShuffleVector loc.res = R.ShuffleVector @vec1.res (mkValue @loc.origin @vec1.typ @vec2.uniq @vec2.res @vec2.name) @mask.res
+                  loc.origin = "shufflevector"
   | Jump          loc.res = R.Jump @lab.res
+                  loc.origin = "jump"
   | Br            loc.res = R.Br @cond.res @then.res @else.res
-  | Invoke        loc.res = let x = @ty.funTy (map R.valType @args.ress) in R.Invoke x (R.Value x @loc.uniq @fn.res) @args.ress @normal.res @unwind.res
+                  loc.origin = "br"
+  | Invoke        loc.res = let x = @ty.funTy (map R.valType @args.res) in R.Invoke x (mkValue @loc.origin x @fn.uniq @fn.res @fn.name) @args.res @normal.res @unwind.res
+                  loc.origin = "invoke"
   | Comment       loc.res = R.Comment @comment
+                  loc.origin = "comment"
   | Unreachable   loc.res = R.Unreachable
+                  loc.origin = "unreachable"
   | Unwind        loc.res = R.Unwind
+                  loc.origin = "unwind"
   | VaArg         loc.res = R.VaArg @vaList.res @argTy.res
-  | IndirectBr    loc.res = R.IndirectBr @addr.res @dests.ress
-  | Switch        loc.res = R.Switch @val.res @defaultDest.res @cases.ress
-  | LandingPad    loc.res = R.LandingPad @resultTy.res @personality.res @cleanup @clauses.ress
+                  loc.origin = "vaarg"
+  | IndirectBr    loc.res = R.IndirectBr @addr.res @dests.res
+                  loc.origin = "indirectbr"
+  | Switch        loc.res = R.Switch @val.res @defaultDest.res @cases.res
+                  loc.origin = "switch"
+  | LandingPad    loc.res = R.LandingPad @resultTy.res @personality.res @cleanup @clauses.res
+                  loc.origin = "landingpad"
   | Resume        loc.res = R.Resume @val.res
+                  loc.origin = "resume"
 
-sem Values [ | | ress use {++} {[]} :: {[R.Value']} ] | Cons +ress = (@hd.res :)
+attr Values
+  syn uniq use {:} {[]} :: {[R.UniqueId]}
+  syn res  use {:} {[]} :: {[R.Value']}
+  syn name use {:} {[]} :: {[Maybe String]}
 
 sem Value | * loc.uniq :: uniqueref counter
-sem Value [ | | res :: {R.Value'} ]
-  | ValInteger loc.res = R.ValInteger @val
-  | ValBool    loc.res = R.ValBool @val
-  | ValFloat   loc.res = R.ValFloat @val
-  | ValDouble  loc.res = R.ValDouble @val
-  | ValFP80    loc.res = R.ValFP80 @val
-  | ValIdent   loc.res = R.ValIdent @ident.res
-  | ValSymbol  loc.res = R.ValSymbol @sym.res
-  | ValNull    loc.res = R.ValNull
-  | ValArray   loc.res = R.ValArray @typ.res (map (R.Value @typ.res @loc.uniq) @vals.ress)
-  | ValVector  loc.res = R.ValVector @typ.res (map (R.Value @typ.res @loc.uniq) @vals.ress)
-  | ValStruct  loc.res = R.ValStruct @fields.ress False
-  | ValPackedStruct loc.res = R.ValStruct @fields.ress True
-  | ValString  loc.res = R.ValString @str
-  | ValConstExpr loc.res = R.ValConstExpr @constExpr.res
-  | ValUndef   loc.res = R.ValUndef
-  | ValLabel   loc.res = R.ValLabel @lab.res
-  | ValZeroInit loc.res = R.ValZeroInit
-  | ValAsm     loc.res = R.ValAsm @a @b @c @d
-  | ValMd      loc.res = R.ValMd @md.res
+              loc.name = Nothing
+              loc.typ = Nothing
+sem Value [ | | typ :: {Maybe R.Type} uniq :: {R.UniqueId} res :: {R.Value'} name :: {Maybe String} ]
+  | ValInteger loc.res      = R.ValInteger @val
+  | ValBool    loc.res      = R.ValBool @val
+  | ValFloat   loc.res      = R.ValFloat @val
+  | ValDouble  loc.res      = R.ValDouble @val
+  | ValFP80    loc.res      = R.ValFP80 @val
+  | ValIdent   loc.res      = R.ValIdent @ident.res
+               lhs.uniq     = uniqueId @ident.res
+               lhs.name     = Just ((\(Ident x) -> x) @ident.copy)
+               lhs.typ      = Just (getType @ident.res)
+  | ValSymbol  loc.res      = R.ValSymbol @sym.res
+               lhs.uniq     = uniqueId @sym.res
+               lhs.name     = Just ((\(Symbol x) -> x) @sym.copy)
+               lhs.typ      = Just (getType @sym.res)
+  | ValNull    loc.res      = R.ValNull
+  | ValArray   loc.res      = R.ValArray @typ.res (zipWith3 (mkValue "valarray" @typ.res) @vals.uniq @vals.res @vals.name)
+  | ValVector  loc.res      = R.ValVector @typ.res (zipWith3 (mkValue "valvector" @typ.res) @vals.uniq @vals.res @vals.name)
+  | ValStruct  loc.res      = R.ValStruct @fields.res False
+  | ValPackedStruct loc.res = R.ValStruct @fields.res True
+  | ValString  loc.res      = R.ValString @str
+  | ValConstExpr loc.res    = R.ValConstExpr @constExpr.res
+  | ValUndef   loc.res      = R.ValUndef
+  | ValLabel   loc.res      = R.ValLabel @lab.res
+               lhs.uniq     = uniqueId @lab.res
+               lhs.name     = Just (R.bbName @lab.res)
+               lhs.typ      = Just (getType @lab.res)
+  | ValZeroInit loc.res     = R.ValZeroInit
+  | ValAsm     loc.res      = R.ValAsm @a @b @c @d
+  | ValMd      loc.res      = R.ValMd @md.res
 
-sem MaybeValue [ | | res :: {Maybe R.Value'} ]
-  | Nothing loc.res = Nothing
-  | Just loc.res = Just @just.res
+sem MaybeValue [ | | typ :: {Maybe R.Type} uniq :: {R.UniqueId} res :: {Maybe R.Value'} name :: {Maybe String} ]
+  | Nothing loc.res  = Nothing
+            loc.uniq :: uniqueref counter
+            loc.name = Nothing
+            loc.typ  = Nothing
+  | Just loc.res  = Just @just.res
+         loc.uniq = @just.uniq
+         loc.name = @just.name
+         loc.typ  = @just.typ
 
-sem TypedValues [ | | ress use {++} {[]} :: {[R.Value]} ]
-  | Cons +ress = (@hd.res :)
+attr TypedValues [ | | res use {:} {[]} :: {[R.Value]} ]
 
-sem TypedValue [ | | res :: {R.Value} ]
-  | Typed loc.res = R.Value @typ.res @loc.valUniqueId @val.res
+sem TypedValue [ origin :: {String} | | res :: {R.Value} ]
+  | Typed loc.res = mkValue (@lhs.origin ++ " typed") @typ.res @val.uniq @val.res @val.name
 
 sem MaybeTypedValue [ | | res :: {Maybe R.Value} ]
   | Nothing loc.res = Nothing
   | Just loc.res = Just @just.res
 
-sem ValueLabs [ | | ress use {++} {[]} :: {[(R.Value, R.BasicBlock)]} ]
-  | Cons +ress = (@hd.res :)
+attr ValueLabs [ | | res use {:} {[]} :: {[(R.Value, R.BasicBlock)]} ]
 
 sem ValueLab [ | | res :: {(R.Value, R.BasicBlock)} ]
   | Tuple
-      loc.uniq :: uniqueref counter
-      loc.res = (R.Value @lhs.typ @loc.uniq @x1.res, @x2.res)
+      loc.res = (mkValue "valuelab" @lhs.typ @x1.uniq @x1.res @x1.name, @x2.res)
 
-sem BlockLabels [ | | ress use {++} {[]} :: {[R.BasicBlock]} ]
-  | Cons +ress = (@hd.res :)
+attr BlockLabels [ | | res use {:} {[]} :: {[R.BasicBlock]} ]
 
-sem Cases [ | | ress use {++} {[]} :: {[(Integer, R.BasicBlock)]} ]
-  | Cons +ress = (@hd.res :)
+attr Cases [ | | res use {:} {[]} :: {[(Integer, R.BasicBlock)]} ]
 
 sem Case [ | | res :: {(Integer, R.BasicBlock)} ]
   | Tuple loc.res = (@x1, @x2.res)
 
-sem Clauses [ | | ress use {++} {[]} :: {[R.Clause]} ] | Cons +ress = (@hd.res :)
+attr Clauses [ | | res use {:} {[]} :: {[R.Clause]} ]
 
 sem Clause [ | | res :: {R.Clause} ]
   | Catch loc.res = R.Catch @val.res
   | Filter loc.res = R.Filter @val.res
 
-sem TypeDecls [ | | ress use {++} {[]} :: {[R.TypeDecl]} ]
-  | Cons +ress = (@hd.res :)
+attr TypeDecls [ | | res use {:} {[]} :: {[R.TypeDecl]} ]
 
 sem TypeDecl [ | | res :: {R.TypeDecl} ]
   | TypeDecl loc.res = R.TypeDecl @typeName.copy @typeValue.res
 
 {-
-sem NamedMds [ | | ress use {++} {[]} :: {[R.NamedMd]} ]
-  | Cons +ress = (@hd.res :)
+attr NamedMds [ | | res use {:} {[]} :: {[R.NamedMd]} ]
 
 sem NamedMd [ | | res :: {R.NamedMd} ]
   | NamedMd loc.res = R.NamedMd @nmName @nmValues
+-}
 
-sem UnnamedMds [ | | ress use {++} {[]} :: {[R.UnnamedMds]} ]
-  | Cons +ress = (@hd.res :)
+attr UnnamedMds [ | | res use {:} {[]} :: {[R.UnnamedMd]} ]
 
 sem UnnamedMd [ | | res :: {R.UnnamedMd} ]
   | UnnamedMd loc.res = R.UnnamedMd @umIndex @umValues.res @umDistinct
--}
 
 sem ValMd [ | | res :: {R.ValMd} ]
   | ValMdString loc.res = R.ValMdString @str
   | ValMdValue  loc.res = R.ValMdValue @val.res
-  | ValMdRef    loc.res = R.ValMdRef @ref
-  | ValMdNode   loc.res = R.ValMdNode @children.ress
+  -- | ValMdRef    defined below
+  | ValMdNode   loc.res = R.ValMdNode @children.res
   | ValMdLoc    loc.res = R.ValMdLoc @dbgLoc.res
   | ValMdDebugInfo loc.res = R.ValMdDebugInfo @info.res
 
-sem MaybeValMds [ | | ress use {++} {[]} :: {[Maybe R.ValMd]} ]
-  | Cons +ress = (@hd.res :)
+sem MaybeValMds [ | | res use {:} {[]} :: {[Maybe R.ValMd]} ]
 
 sem MaybeValMd [ | | res :: {Maybe R.ValMd} ]
   | Nothing loc.res = Nothing
   | Just loc.res = Just @just.res
 
 sem ConstExpr [ | | res :: {R.ConstExpr} ]
-  | ConstGEP loc.res = R.ConstGEP @inbounds @mix @mp.res @ixs.ress
+  | ConstGEP loc.res = R.ConstGEP @inbounds @mix @mp.res @ixs.res
   | ConstConv loc.res = R.ConstConv @op @val.res @ty.res
   | ConstSelect loc.res = R.ConstSelect @cond.res @then.res @else.res
   | ConstBlockAddr loc.res = R.ConstBlockAddr @sym.res @lab.res
   | ConstFCmp loc.res = R.ConstFCmp @op @lft.res @rgt.res
   | ConstICmp loc.res = R.ConstICmp @op @lft.res @rgt.res
-  | ConstArith
-      loc.uniq :: uniqueref counter
-      loc.res = R.ConstArith @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
-  | ConstBit
-      loc.uniq :: uniqueref counter
-      loc.res = R.ConstBit @op @lft.res (R.Value @lft.typ @loc.uniq @rgt.res)
+  | ConstArith loc.res = R.ConstArith @op @lft.res (mkValue "constarith" @lft.typ @rgt.uniq @rgt.res @rgt.name)
+  | ConstBit loc.res = R.ConstBit @op @lft.res (mkValue "constbit" @lft.typ @rgt.uniq @rgt.res @rgt.name)
 
 sem DebugLoc [ | | res :: {R.DebugLoc} ]
   | DebugLoc loc.res = R.DebugLoc @dlLine @dlCol @dlScope.res @dlIA.res @dlImplicit
@@ -377,7 +471,7 @@ sem DIImportedEntity [ | | res :: {R.DIImportedEntity} ]
   | DIImportedEntity
       loc.res
         = R.DIImportedEntity
-            @diieTag
+            (toEnum (fromIntegral @diieTag))
             @diieScope.res
             @diieEntity.res
             @diieFile.res
@@ -392,7 +486,7 @@ sem DITemplateValueParameter [ | | res :: {R.DITemplateValueParameter} ]
   | DITemplateValueParameter
       loc.res
         = R.DITemplateValueParameter
-            @ditvpTag
+            (toEnum (fromIntegral @ditvpTag))
             @ditvpName
             @ditvpType.res
             @ditvpValue.res
@@ -405,11 +499,11 @@ sem DIBasicType [ | | res :: {R.DIBasicType} ]
   | DIBasicType
       loc.res
         = R.DIBasicType
-            @dibtTag
+            (toEnum (fromIntegral @dibtTag))
             @dibtName
             @dibtSize
             @dibtAlign
-            @dibtEncoding
+            (toEnum (fromIntegral @dibtEncoding))
             @dibtFlags
 
 sem DICompileUnit [ | | res :: {R.DICompileUnit} ]
@@ -442,7 +536,7 @@ sem DICompositeType [ | | res :: {R.DICompositeType} ]
   | DICompositeType
      loc.res
        = R.DICompositeType
-           @dictTag
+           (toEnum (fromIntegral @dictTag))
            @dictName
            @dictFile.res
            @dictLine
@@ -464,7 +558,7 @@ sem DIDerivedType [ | | res :: {R.DIDerivedType} ]
   | DIDerivedType
       loc.res
         = R.DIDerivedType
-            @didtTag
+            (toEnum (fromIntegral @didtTag))
             @didtName
             @didtFile.res
             @didtLine
@@ -508,7 +602,11 @@ sem DIGlobalVariableExpression [ | | res :: {R.DIGlobalVariableExpression} ]
 sem DILexicalBlock [ | | res :: {R.DILexicalBlock} ]
   | DILexicalBlock
       loc.res
-        = R.DILexicalBlock @dilbScope.res @dilbFile.res @dilbLine @dilbColumn
+        = R.DILexicalBlock
+            @dilbScope.res
+            @dilbFile.res
+            @dilbLine
+            @dilbColumn
 
 sem DILexicalBlockFile [ | | res :: {R.DILexicalBlockFile} ]
   | DILexicalBlockFile
@@ -565,18 +663,34 @@ sem DISubroutineType [ | | res :: {R.DISubroutineType} ]
 -- Interesting resolution
 --------------------------------------------------------------------------------
 
+{
+lookupEnv :: (Show a, Ord a) => String -> a -> Map a b -> b
+lookupEnv loc key env = fromMaybe
+  (error (concat
+    [ "In Resolve.ag at "
+    , loc
+    , ", key not found: "
+    , show key
+    , ", env only contains: "
+    , show (Map.keys env)
+    ]))
+  (env Map.!? key)
+}
+
 sem BlockLabel [ | | res :: {R.BasicBlock} ]
-  | Named loc.res = @lhs.namedLabEnv Map.! @loc.copy
-  | Anon loc.res = @lhs.anonLabEnv !! @number
+  | Named Anon loc.res = lookupEnv "Named Anon loc.res" @loc.copy @lhs.labEnv
 
 sem Ident [ | | res :: {R.IdentValue}  ]
-  | Ident loc.res = @lhs.identEnv Map.! (Ident @name)
+  | Ident loc.res = lookupEnv "Ident loc.res" @loc.copy @lhs.identEnv
 
 sem Ident [ | | resTy :: {R.Type} ]
-  | Ident loc.resTy = @lhs.typeEnv Map.! @loc.copy
+  | Ident loc.resTy = lookupEnv "Ident loc.resTy" @loc.copy @lhs.typeEnv
 
 sem Symbol [ | | res :: {R.SymValue} ]
-  | Symbol loc.res = @lhs.symEnv Map.! (Symbol @name)
+  | Symbol loc.res = lookupEnv "Symbol loc.res" @loc.copy @lhs.symEnv
+
+sem ValMd
+  | ValMdRef loc.res = lookupEnv "ValMdRef loc.res" @ref @lhs.valMdEnv
 
 --------------------------------------------------------------------------------
 -- Useful sets
@@ -592,7 +706,7 @@ set ValueRelated = Value Values TypedValues ValueLabs ValueLab TypedValue
                    MaybeValue MaybeTypedValue Clause Clauses ConstExpr
 
 set ValMdRelated = ValMd MaybeValMd StmtMds StmtMd MaybeValMds
-                   GlobalMdAttachments FnMdAttachments
+                   GlobalMdAttachments FnMdAttachments UnnamedMds UnnamedMd
 
 set SubTop = Globals Global Declares Declare Defines Define GlobalAliases
              GlobalAlias
@@ -606,8 +720,8 @@ set InstrRelated = BasicBlocks BasicBlock Stmts Stmt Instr
 sem BasicBlock | BasicBlock
   loc.bbName
     = case @bbLabel of
-        Just (Named (Ident name)) -> name
-        Just (Anon n) -> show n
+        Just (Named i) -> prettyIdent i
+        Just (Anon n) -> "%" ++ show n
         Nothing -> "bb" ++ show @bbUniqueId
 
 --------------------------------------------------------------------------------
@@ -642,34 +756,25 @@ sem Stmt
   | Result loc.stmtUniqueId :: uniqueref counter
   | Effect loc.stmtUniqueId :: uniqueref counter
 
-sem TypedValue
-  | Typed loc.valUniqueId :: uniqueref counter
-
 --------------------------------------------------------------------------------
 -- Label environment synthesis
 --------------------------------------------------------------------------------
 
 attr InstrRelated BlockLabels BlockLabel Case Cases ValueRelated ValMdRelated DI
-  inh namedLabEnv :: {Map BlockLabel R.BasicBlock}
-  inh anonLabEnv :: {[R.BasicBlock]}
+  inh labEnv :: {Map BlockLabel R.BasicBlock}
 
 attr BasicBlocks BasicBlock
-  syn namedLabEnv use {<>} {mempty} :: {Map BlockLabel R.BasicBlock}
-  syn anonLabEnv use {++} {[]} :: {[R.BasicBlock]}
+  syn labEnvSyn use {<>} {mempty} :: {Map BlockLabel R.BasicBlock}
 
 sem Define
-  | Define loc.namedLabEnv :: {Map BlockLabel R.BasicBlock}
-           loc.anonLabEnv :: {[R.BasicBlock]}
-           defBody.anonLabEnv = @defBody.anonLabEnv
-           defBody.namedLabEnv = @defBody.namedLabEnv
+  | Define loc.labEnv = @defBody.labEnvSyn
 
 sem BasicBlock
   | BasicBlock
-      +namedLabEnv
+      +labEnvSyn
         = case @bbLabel of
             Nothing -> id
             Just lab -> Map.insert lab @loc.res
-      +anonLabEnv = (@loc.res :)
 
 --------------------------------------------------------------------------------
 -- Stmt parent basic block
@@ -688,20 +793,20 @@ attr Ident InstrRelated ValueRelated ValMdRelated DI TypedIdent TypedIdents
   inh identEnv :: {Map Ident R.IdentValue}
 
 attr BasicBlocks BasicBlock Stmts Stmt TypedIdents TypedIdent
-  syn identEnv use {<>} {mempty} :: {Map Ident R.IdentValue}
+  syn identEnvSyn use {<>} {mempty} :: {Map Ident R.IdentValue}
 
-attr TypedIdents TypedIdent
+attr TypedIdents TypedIdent BasicBlocks BasicBlock
   inh parentDefine :: {R.Define}
 
 sem Define
-  | Define loc.identEnv :: {Map Ident R.IdentValue}
+  | Define loc.identEnv = @defBody.identEnvSyn <> @defArgs.identEnvSyn
            loc.parentDefine = @loc.res
 
 sem Stmt
-  | Result +identEnv = Map.insert @ident.copy (R.IdentValStmt @loc.res)
+  | Result +identEnvSyn = Map.insert @ident.copy (R.IdentValStmt @loc.res)
 
 sem TypedIdent
-  | Typed +identEnv = Map.insert @ident.copy (R.IdentValArgument @loc.res)
+  | Typed +identEnvSyn = Map.insert @ident.copy (R.IdentValArgument @loc.res)
 
 --------------------------------------------------------------------------------
 -- Type identifier environment synthesis
@@ -712,13 +817,13 @@ attr Ident TypeDecls TypeDecl Types Type SubTop Define TypedIdents TypedIdent
   inh typeEnv :: {Map Ident R.Type}
 
 attr TypeDecls TypeDecl
-  syn typeEnv use {<>} {mempty} :: {Map Ident R.Type}
+  syn typeEnvSyn use {<>} {mempty} :: {Map Ident R.Type}
       
 sem Module
-  | Module loc.typeEnv = @modTypes.typeEnv
+  | Module loc.typeEnv = @modTypes.typeEnvSyn
 
 sem TypeDecl
-  | TypeDecl +typeEnv = Map.insert @typeName.copy @typeValue.res
+  | TypeDecl +typeEnvSyn = Map.insert @typeName.copy @typeValue.res
 
 --------------------------------------------------------------------------------
 -- Symbol environment synthesis
@@ -727,48 +832,62 @@ sem TypeDecl
 sem Module | Module
   loc.symEnv
     = mconcat
-        [ @modAliases.symEnv
-        , @modGlobals.symEnv
-        , @modDeclares.symEnv
-        , @modDefines.symEnv
+        [ @modAliases.symEnvSyn
+        , @modGlobals.symEnvSyn
+        , @modDeclares.symEnvSyn
+        , @modDefines.symEnvSyn
         ]
 
 attr GlobalAliases GlobalAlias Globals Global Declares Declare Defines Define
-  syn symEnv use {<>} {mempty} :: {Map Symbol R.SymValue}
+  syn symEnvSyn use {<>} {mempty} :: {Map Symbol R.SymValue}
 
 attr Symbol SubTop InstrRelated
   ValMdRelated DI ValueRelated
   inh symEnv :: {Map Symbol R.SymValue}
 
 sem GlobalAlias | GlobalAlias
-  +symEnv = Map.insert @aliasName.copy (R.SymValAlias @loc.res)
+  +symEnvSyn = Map.insert @aliasName.copy (R.SymValAlias @loc.res)
 
 sem Global | Global
-  +symEnv = Map.insert @globalSym.copy (R.SymValGlobal @loc.res)
+  +symEnvSyn = Map.insert @globalSym.copy (R.SymValGlobal @loc.res)
 
 sem Declare | Declare
-  +symEnv = Map.insert @decName.copy (R.SymValDeclare @loc.res)
+  +symEnvSyn = Map.insert @decName.copy (R.SymValDeclare @loc.res)
 
 sem Define | Define
-  +symEnv = Map.insert @defName.copy (R.SymValDefine @loc.res)
+  +symEnvSyn = Map.insert @defName.copy (R.SymValDefine @loc.res)
+
+--------------------------------------------------------------------------------
+-- ValMd environment synthesis
+--------------------------------------------------------------------------------
+
+sem Module | Module
+  loc.valMdEnv
+    = @modUnnamedMd.valMdEnvSyn
+
+attr UnnamedMds UnnamedMd
+  syn valMdEnvSyn use {<>} {mempty} :: {Map Int R.ValMd}
+
+attr SubTop InstrRelated ValMdRelated DI ValueRelated
+  inh valMdEnv :: {Map Int R.ValMd}
+
+sem UnnamedMd | UnnamedMd
+  +valMdEnvSyn = Map.insert @umIndex @umValues.res
 
 --------------------------------------------------------------------------------
 -- Explicitly missing rules (our grammar is an overapproximation)
 --------------------------------------------------------------------------------
 
 sem GlobalAlias | GlobalAlias aliasValue
-  .namedLabEnv = error "global aliases should not reference local labels"
-  .anonLabEnv = error "global aliases should not reference local labels"
+  .labEnv = error "global aliases should not reference local labels"
   .identEnv = error "global aliases should not reference local values"
 
 sem Global | Global
   globalValue
-    .namedLabEnv = error "global values should not reference local labels"
-    .anonLabEnv = error "global values should not reference local labels"
+    .labEnv = error "global values should not reference local labels"
     .identEnv = error "global values should not reference local values"
   globalMetadata
-    .namedLabEnv = error "global metadata should not reference local labels"
-    .anonLabEnv = error "global metadata should not reference local labels"
+    .labEnv = error "global metadata should not reference local labels"
     .identEnv = error "global metadata should not reference local values"
 
 sem Type | Alias ident

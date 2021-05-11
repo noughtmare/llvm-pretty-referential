@@ -36,7 +36,7 @@ data Module
       modDataLayout :: DataLayout     -- ^ type size and alignment information
       modTypes      :: TypeDecls      -- ^ top-level type aliases
       modNamedMd    :: {[NamedMd]}
-      modUnnamedMd  :: {[UnnamedMd]}
+      modUnnamedMd  :: UnnamedMds
       modComdat     :: {Map.Map String SelectionKind}
       modGlobals    :: Globals        -- ^ global value declarations
       modDeclares   :: Declares       -- ^ external function declarations (without definitions)
@@ -44,13 +44,12 @@ data Module
       modInlineAsm  :: InlineAsm
       modAliases    :: GlobalAliases
 
-{-
 -- Named Metadata --------------------------------------------------------------
 
-data NamedMd
-  | NamedMd
-      nmName   :: String
-      nmValues :: {[Int]}
+-- data NamedMd
+--   | NamedMd
+--       nmName   :: String
+--       nmValues :: {[Int]}
 
 -- Unnamed Metadata ------------------------------------------------------------
 
@@ -59,15 +58,16 @@ data UnnamedMd
       umIndex    :: Int
       umValues   :: ValMd
       umDistinct :: Bool
--}
 
 -- Aliases ---------------------------------------------------------------------
 
 data GlobalAlias 
   | GlobalAlias
-      aliasName  :: Symbol
-      aliasType  :: Type
-      aliasValue :: Value
+      aliasLinkage    :: {Maybe Linkage}
+      aliasVisibility :: {Maybe Visibility}
+      aliasName       :: Symbol
+      aliasType       :: Type
+      aliasValue      :: Value
 
 -- Data Layout -----------------------------------------------------------------
   
@@ -186,29 +186,32 @@ data Global
 
 data Declare
   | Declare
-    decRetType :: Type
-    decName    :: Symbol
-    decArgs    :: Types
-    decVarArgs :: Bool
-    decAttrs   :: {[FunAttr]}
-    decComdat  :: {Maybe String}
+    decLinkage    :: {Maybe Linkage}
+    decVisibility :: {Maybe Visibility}
+    decRetType    :: Type
+    decName       :: Symbol
+    decArgs       :: Types
+    decVarArgs    :: Bool
+    decAttrs      :: {[FunAttr]}
+    decComdat     :: {Maybe String}
 
 
 -- Function Definitions --------------------------------------------------------
 
 data Define
   | Define
-    defLinkage  :: {Maybe Linkage}
-    defRetType  :: Type
-    defName     :: Symbol
-    defArgs     :: TypedIdents
-    defVarArgs  :: Bool
-    defAttrs    :: {[FunAttr]}
-    defSection  :: {Maybe String}
-    defGC       :: {Maybe GC}
-    defBody     :: BasicBlocks
-    defMetadata :: FnMdAttachments
-    defComdat   :: {Maybe String}
+    defLinkage    :: {Maybe Linkage}
+    defVisibility :: {Maybe Visibility}
+    defRetType    :: Type
+    defName       :: Symbol
+    defArgs       :: TypedIdents
+    defVarArgs    :: Bool
+    defAttrs      :: {[FunAttr]}
+    defSection    :: {Maybe String}
+    defGC         :: {Maybe GC}
+    defBody       :: BasicBlocks
+    defMetadata   :: FnMdAttachments
+    defComdat     :: {Maybe String}
 
 -- Function Attributes and attribute groups ------------------------------------
 
