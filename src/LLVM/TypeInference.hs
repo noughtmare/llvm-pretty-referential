@@ -75,10 +75,10 @@ instance HasType Stmt where
   getType = getType . stmtInstr
 
 instance HasType Define where
-  getType Define { defRetType=ret, defArgs=args } = makeFunTy ret (map argType args)
+  getType Define { defRetType=ret, defArgs=args } = FunTy ret (map argType args) False
 
 instance HasType Declare where
-  getType Declare { decRetType=ret, decArgs=args } = makeFunTy ret args
+  getType Declare { decRetType=ret, decArgs=args } = FunTy ret args False
 
 instance HasType Global where
   getType Global { globalType = t } = t
