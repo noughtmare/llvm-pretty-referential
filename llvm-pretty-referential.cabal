@@ -24,6 +24,7 @@ extra-source-files:
   , src/Text/LLVM/AG.ag
   , src/Text/LLVM/AGData.ag
   , src/Text/LLVM/Resolve.ag
+  , uuagc_options
 build-type: Custom
 
 custom-setup
