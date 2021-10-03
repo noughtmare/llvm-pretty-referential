@@ -167,8 +167,12 @@ data Value = Value
   , valUniqueId :: UniqueId
   , valValue    :: Value'
   , valName     :: Maybe String
+  , valMd       :: [ValMd]
   }
-  deriving (Generic, Show)
+  deriving (Generic)
+
+instance Show Value where
+  show (Value t u v n m) = intercalate " " ["Value", show t, show u, show v, show n, "_ValMd"] 
 
 instance HasUniqueId Value where
   uniqueId = valUniqueId

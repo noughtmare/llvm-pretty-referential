@@ -29,12 +29,14 @@ instance IsValue Stmt where
                     (case stmtType x of
                        Result y -> Just (prettyIdent y)
                        Effect -> Nothing)
+                    []
 
 instance IsValue Argument where
   toValue x = Value (getType x)
                     (uniqueId x)
                     (ValIdent (IdentValArgument x))
                     (Just (argName x))
+                    []
 
 instance IsValue SymValue where
   toValue (SymValAlias ga) = toValue ga
@@ -63,30 +65,35 @@ instance IsValue GlobalAlias where
                      (uniqueId ga)
                      (ValSymbol (SymValAlias ga))
                      (Just (prettySymbol (aliasName ga)))
+                     []
 
 instance IsValue Global where
   toValue g = Value (getType g)
                     (uniqueId g)
                     (ValSymbol (SymValGlobal g))
                     (Just (prettySymbol (globalName g)))
+                    []
 
 instance IsValue Declare where
   toValue dec = Value (getType dec)
                       (uniqueId dec)
                       (ValSymbol (SymValDeclare dec))
                       (Just (prettySymbol (decName dec)))
+                      []
 
 instance IsValue Define where
   toValue def = Value (getType def)
                       (uniqueId def)
                       (ValSymbol (SymValDefine def))
                       (Just (prettySymbol (defName def)))
+                      []
 
 instance IsValue BasicBlock where
   toValue x = Value (getType x)
                     (uniqueId x)
                     (ValLabel x)
                     (Just (prettyLabel x))
+                    []
 
 -- | Find a function in the Module by its name.
 findFunctionByName :: Module -> String -> Maybe Define

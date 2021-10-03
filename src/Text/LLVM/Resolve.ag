@@ -20,6 +20,7 @@ import Data.Maybe (fromMaybe)
 import qualified LLVM.Types as R
 import Data.Word (Word8,Word16,Word32,Word64)
 import Data.Int (Int32,Int64)
+import Data.List (zipWith4)
 
 import Text.LLVM.AST
 import Text.LLVM.AGData
@@ -99,7 +100,8 @@ sem GlobalAlias [ | | res :: {R.GlobalAlias} ] | GlobalAlias
         (mkValue "globalalias" (fromMaybe @aliasType.res @aliasValue.typ)
                  @aliasValue.uniq
                  @aliasValue.res
-                 @aliasValue.name)
+                 @aliasValue.name
+                 [])
         @loc.uniq
 
 type GlobalMdAttachments = map {KindMd} ValMd
@@ -117,7 +119,8 @@ sem Global [ | | res :: {R.Global} ] | Global
         ((\val -> mkValue "global" (fromMaybe @globalType.res @globalValue.typ)
                     @globalValue.uniq
                     val
-                    @globalValue.name) <$> @globalValue.res)
+                    @globalValue.name
+                    []) <$> @globalValue.res)
         @loc.uniq
         @globalAlign
         @globalMetadata.res
@@ -226,80 +229,89 @@ matchType (R.Struct x _ _) (R.Struct y _ _) = True || x == y -- disable this for
 matchType (R.Vector n1 t1) (R.Vector n2 t2) = n1 == n2 && matchType t1 t2
 matchType t1 t2 = t1 == t2
 
-mkValue :: String -> R.Type -> R.UniqueId -> R.Value' -> Maybe String -> R.Value
-mkValue str t _ v@(R.ValIdent (R.IdentValStmt x)) _ | not (matchType t (getType x)) = error ("Stmt " ++ str ++ ": " ++ show (t,getType x,R.stmtInstr x))
-mkValue str t _ v@(R.ValIdent x) _ | not (matchType t (getType x)) = error ("Ident " ++ str ++ ": " ++ show (t,getType x))
-mkValue str t _ v@(R.ValSymbol x) _ | not (matchType t (getType x)) = error ("Symbol " ++ str ++ ": " ++ show (t,getType x))
-mkValue _ t i v s = R.Value t i v s
+-- This functions does some consistency tests at runtime
+mkValue :: String -> R.Type -> R.UniqueId -> R.Value' -> Maybe String -> [R.ValMd] -> R.Value
+mkValue str t _ v@(R.ValIdent (R.IdentValStmt x)) _ _ | not (matchType t (getType x)) = error ("Stmt " ++ str ++ ": " ++ show (t,getType x,R.stmtInstr x))
+mkValue str t _ v@(R.ValIdent x) _ _ | not (matchType t (getType x)) = error ("Ident " ++ str ++ ": " ++ show (t,getType x))
+mkValue str t _ v@(R.ValSymbol x) _ _ | not (matchType t (getType x)) = error ("Symbol " ++ str ++ ": " ++ show (t,getType x))
+mkValue _ t i v s m = R.Value t i v s m
 }
 
+-- These semantic rules convert the Instr type from llvm-pretty to the Instr type from llvm-pretty-referential.
+-- The main difference is that every operand must be a full-fledged value.
+-- In llvm-pretty, when the types of two arguments are known to be equal, one of them is left out.
+-- For analyses we want a more uniform interface.
 sem Instr [ | | res :: {R.Instr} ]
   | Ret           loc.res = R.Ret @retVal.res
-                  loc.origin = "ret"
   | RetVoid       loc.res = R.RetVoid
-                  loc.origin = "retvoid"
-  | Arith         loc.res = R.Arith @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
-                  loc.origin = "arith"
-  | Bit           loc.res = R.Bit @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
-                  loc.origin = "bit"
+  | Arith         loc.res = R.Arith @op @lft.res (mkValue @loc.dbgOrigin @lft.typ @rgt.uniq @rgt.res @rgt.name [])
+  | Bit           loc.res = R.Bit @op @lft.res (mkValue @loc.dbgOrigin @lft.typ @rgt.uniq @rgt.res @rgt.name [])
   | Conv          loc.res = R.Conv @op @val.res @tgt.res
-                  loc.origin = "conv"
-  | Call          loc.res = let t = @resType.funTy (map R.valType @args.res) in R.Call @tailCall t (mkValue @loc.origin t @fun.uniq @fun.res @fun.name) @args.res
-                  loc.origin = "call"
+  | Call          loc.res = let t = @resType.funTy (map R.valType @args.res) in R.Call @tailCall t (mkValue @loc.dbgOrigin t @fun.uniq @fun.res @fun.name []) @args.res
   | Alloca        loc.res = R.Alloca @elemType.res @amount.res @align
-                  loc.origin = "alloca"
   | Load          loc.res = R.Load @addr.res @atomicOrdering @align
-                  loc.origin = "load"
   | Store         loc.res = R.Store @val.res @ptr.res @atomicOrdering @align
-                  loc.origin = "store"
   | Fence         loc.res = R.Fence @syncScope @atomicOrdering
-                  loc.origin = "fence"
   | CmpXchg       loc.res = R.CmpXchg @weak @volatile @ptr.res @value.res @equalValue.res @syncScope @successOrdering @failOrdering
-                  loc.origin = "cmpxchg"
   | AtomicRW      loc.res = R.AtomicRW @volatile @op @ptr.res @value.res @syncScope @syncOrdering
-                  loc.origin = "atomicrw"
-  | ICmp          loc.res = R.ICmp @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
-                  loc.origin = "icmp"
-  | FCmp          loc.res = R.FCmp @op @lft.res (mkValue @loc.origin @lft.typ @rgt.uniq @rgt.res @rgt.name)
-                  loc.origin = "fcmp"
+  | ICmp          loc.res = R.ICmp @op @lft.res (mkValue @loc.dbgOrigin @lft.typ @rgt.uniq @rgt.res @rgt.name [])
+  | FCmp          loc.res = R.FCmp @op @lft.res (mkValue @loc.dbgOrigin @lft.typ @rgt.uniq @rgt.res @rgt.name [])
   | Phi           loc.res = R.Phi @typ.res @preds.res
-                  loc.origin = "phi"
   | GEP           loc.res = R.GEP @inbounds @base.res @path.res
-                  loc.origin = "gep"
-  | Select        loc.res = R.Select @cond.res @then.res (mkValue @loc.origin @then.typ @else.uniq @else.res @else.name)
-                  loc.origin = "select"
+  | Select        loc.res = R.Select @cond.res @then.res (mkValue @loc.dbgOrigin @then.typ @else.uniq @else.res @else.name [])
   | ExtractValue  loc.res = R.ExtractValue @aggr.res @path
-                  loc.origin = "extractvalue"
   | InsertValue   loc.res = R.InsertValue @val.res @aggr.res @path
-                  loc.origin = "insertvalue"
-  | ExtractElt    loc.res = R.ExtractElt @vec.res (mkValue @loc.origin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name)
-                  loc.origin = "extractelt"
-  | InsertElt     loc.res = R.InsertElt @vec.res @val.res (mkValue @loc.origin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name)
-                  loc.origin = "insertelt"
-  | ShuffleVector loc.res = R.ShuffleVector @vec1.res (mkValue @loc.origin @vec1.typ @vec2.uniq @vec2.res @vec2.name) @mask.res
-                  loc.origin = "shufflevector"
+  | ExtractElt    loc.res = R.ExtractElt @vec.res (mkValue @loc.dbgOrigin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name [])
+  | InsertElt     loc.res = R.InsertElt @vec.res @val.res (mkValue @loc.dbgOrigin (R.PrimType (Integer 64)) @index.uniq @index.res @index.name [])
+  | ShuffleVector loc.res = R.ShuffleVector @vec1.res (mkValue @loc.dbgOrigin @vec1.typ @vec2.uniq @vec2.res @vec2.name []) @mask.res
   | Jump          loc.res = R.Jump @lab.res
-                  loc.origin = "jump"
   | Br            loc.res = R.Br @cond.res @then.res @else.res
-                  loc.origin = "br"
-  | Invoke        loc.res = let x = @ty.funTy (map R.valType @args.res) in R.Invoke x (mkValue @loc.origin x @fn.uniq @fn.res @fn.name) @args.res @normal.res @unwind.res
-                  loc.origin = "invoke"
+  | Invoke        loc.res = let x = @ty.funTy (map R.valType @args.res) in R.Invoke x (mkValue @loc.dbgOrigin x @fn.uniq @fn.res @fn.name []) @args.res @normal.res @unwind.res
   | Comment       loc.res = R.Comment @comment
-                  loc.origin = "comment"
   | Unreachable   loc.res = R.Unreachable
-                  loc.origin = "unreachable"
   | Unwind        loc.res = R.Unwind
-                  loc.origin = "unwind"
   | VaArg         loc.res = R.VaArg @vaList.res @argTy.res
-                  loc.origin = "vaarg"
   | IndirectBr    loc.res = R.IndirectBr @addr.res @dests.res
-                  loc.origin = "indirectbr"
   | Switch        loc.res = R.Switch @val.res @defaultDest.res @cases.res
-                  loc.origin = "switch"
   | LandingPad    loc.res = R.LandingPad @resultTy.res @personality.res @cleanup @clauses.res
-                  loc.origin = "landingpad"
   | Resume        loc.res = R.Resume @val.res
-                  loc.origin = "resume"
+
+-- These next rules exist purely for debugging purposes.
+-- When an ill-formed value is detected by mkValue then it reports this debug origin.
+sem Instr
+  | Ret           loc.dbgOrigin = "ret"
+  | RetVoid       loc.dbgOrigin = "retvoid"
+  | Arith         loc.dbgOrigin = "arith"
+  | Bit           loc.dbgOrigin = "bit"
+  | Conv          loc.dbgOrigin = "conv"
+  | Call          loc.dbgOrigin = "call"
+  | Alloca        loc.dbgOrigin = "alloca"
+  | Load          loc.dbgOrigin = "load"
+  | Store         loc.dbgOrigin = "store"
+  | Fence         loc.dbgOrigin = "fence"
+  | CmpXchg       loc.dbgOrigin = "cmpxchg"
+  | AtomicRW      loc.dbgOrigin = "atomicrw"
+  | ICmp          loc.dbgOrigin = "icmp"
+  | FCmp          loc.dbgOrigin = "fcmp"
+  | Phi           loc.dbgOrigin = "phi"
+  | GEP           loc.dbgOrigin = "gep"
+  | Select        loc.dbgOrigin = "select"
+  | ExtractValue  loc.dbgOrigin = "extractvalue"
+  | InsertValue   loc.dbgOrigin = "insertvalue"
+  | ExtractElt    loc.dbgOrigin = "extractelt"
+  | InsertElt     loc.dbgOrigin = "insertelt"
+  | ShuffleVector loc.dbgOrigin = "shufflevector"
+  | Jump          loc.dbgOrigin = "jump"
+  | Br            loc.dbgOrigin = "br"
+  | Invoke        loc.dbgOrigin = "invoke"
+  | Comment       loc.dbgOrigin = "comment"
+  | Unreachable   loc.dbgOrigin = "unreachable"
+  | Unwind        loc.dbgOrigin = "unwind"
+  | VaArg         loc.dbgOrigin = "vaarg"
+  | IndirectBr    loc.dbgOrigin = "indirectbr"
+  | Switch        loc.dbgOrigin = "switch"
+  | LandingPad    loc.dbgOrigin = "landingpad"
+  | Resume        loc.dbgOrigin = "resume"
 
 attr Values
   syn uniq use {:} {[]} :: {[R.UniqueId]}
@@ -324,8 +336,8 @@ sem Value [ | | typ :: {Maybe R.Type} uniq :: {R.UniqueId} res :: {R.Value'} nam
                lhs.name     = Just ((\(Symbol x) -> x) @sym.copy)
                lhs.typ      = Just (getType @sym.res)
   | ValNull    loc.res      = R.ValNull
-  | ValArray   loc.res      = R.ValArray @typ.res (zipWith3 (mkValue "valarray" @typ.res) @vals.uniq @vals.res @vals.name)
-  | ValVector  loc.res      = R.ValVector @typ.res (zipWith3 (mkValue "valvector" @typ.res) @vals.uniq @vals.res @vals.name)
+  | ValArray   loc.res      = R.ValArray @typ.res (zipWith4 (mkValue "valarray" @typ.res) @vals.uniq @vals.res @vals.name (repeat []))
+  | ValVector  loc.res      = R.ValVector @typ.res (zipWith4 (mkValue "valvector" @typ.res) @vals.uniq @vals.res @vals.name (repeat []))
   | ValStruct  loc.res      = R.ValStruct @fields.res False
   | ValPackedStruct loc.res = R.ValStruct @fields.res True
   | ValString  loc.res      = R.ValString @str
@@ -349,10 +361,29 @@ sem MaybeValue [ | | typ :: {Maybe R.Type} uniq :: {R.UniqueId} res :: {Maybe R.
          loc.name = @just.name
          loc.typ  = @just.typ
 
+--
+-- resolve llvm debug calls
+--
+
+attr InstrRelated [ dbgValuesInh :: {Map R.Value R.ValMd} | | dbgValuesSyn :: {Map R.Value R.ValMd} ]
+
+-- TODO:
+
+{
+isDbgValue :: R.Value -> Bool
+isDbgValue (R.valValue -> R.ValSymbol (R.SymValDeclare (R.decName -> Symbol "llvm.dbg.value"))) = True
+isDbgValue _ = False
+}
+
+-- sem Instr
+--   | Call +dbgValuesSyn = if isDbgValue @fun.res then Map.insert _key _value else id
+
+--
+
 attr TypedValues [ | | res use {:} {[]} :: {[R.Value]} ]
 
-sem TypedValue [ origin :: {String} | | res :: {R.Value} ]
-  | Typed loc.res = mkValue (@lhs.origin ++ " typed") @typ.res @val.uniq @val.res @val.name
+sem TypedValue [ dbgOrigin :: {String} | | res :: {R.Value} ]
+  | Typed loc.res = mkValue (@lhs.dbgOrigin ++ " typed") @typ.res @val.uniq @val.res @val.name []
 
 sem MaybeTypedValue [ | | res :: {Maybe R.Value} ]
   | Nothing loc.res = Nothing
@@ -362,7 +393,7 @@ attr ValueLabs [ | | res use {:} {[]} :: {[(R.Value, R.BasicBlock)]} ]
 
 sem ValueLab [ | | res :: {(R.Value, R.BasicBlock)} ]
   | Tuple
-      loc.res = (mkValue "valuelab" @lhs.typ @x1.uniq @x1.res @x1.name, @x2.res)
+      loc.res = (mkValue "valuelab" @lhs.typ @x1.uniq @x1.res @x1.name [], @x2.res)
 
 attr BlockLabels [ | | res use {:} {[]} :: {[R.BasicBlock]} ]
 
@@ -415,8 +446,8 @@ sem ConstExpr [ | | res :: {R.ConstExpr} ]
   | ConstBlockAddr loc.res = R.ConstBlockAddr @sym.res @lab.res
   | ConstFCmp loc.res = R.ConstFCmp @op @lft.res @rgt.res
   | ConstICmp loc.res = R.ConstICmp @op @lft.res @rgt.res
-  | ConstArith loc.res = R.ConstArith @op @lft.res (mkValue "constarith" @lft.typ @rgt.uniq @rgt.res @rgt.name)
-  | ConstBit loc.res = R.ConstBit @op @lft.res (mkValue "constbit" @lft.typ @rgt.uniq @rgt.res @rgt.name)
+  | ConstArith loc.res = R.ConstArith @op @lft.res (mkValue "constarith" @lft.typ @rgt.uniq @rgt.res @rgt.name [])
+  | ConstBit loc.res = R.ConstBit @op @lft.res (mkValue "constbit" @lft.typ @rgt.uniq @rgt.res @rgt.name [])
 
 sem DebugLoc [ | | res :: {R.DebugLoc} ]
   | DebugLoc loc.res = R.DebugLoc @dlLine @dlCol @dlScope.res @dlIA.res @dlImplicit
